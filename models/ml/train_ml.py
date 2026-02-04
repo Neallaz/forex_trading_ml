@@ -1,5 +1,5 @@
 """
-آموزش مدل‌های کلاسیک Machine Learning
+Train Classic Machine Learning Models
 """
 
 import pandas as pd
@@ -8,6 +8,11 @@ from pathlib import Path
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
+import os
+import sys
+# Add project root to Python path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
@@ -21,7 +26,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 from config.settings import settings
 
 class MLModelTrainer:
-    """کلاس آموزش مدل‌های ML"""
+    """Machine Learning Model Trainer Class"""
     
     def __init__(self):
         self.processed_dir = Path(settings.PROCESSED_DATA_DIR)
@@ -29,7 +34,7 @@ class MLModelTrainer:
         self.models_dir.mkdir(parents=True, exist_ok=True)
         
     def load_features(self, symbol):
-        """بارگذاری ویژگی‌های مهندسی شده"""
+        """Load engineered features"""
         file_path = self.processed_dir / f"{symbol}_features.csv"
         if not file_path.exists():
             return None
@@ -38,12 +43,12 @@ class MLModelTrainer:
         return df
     
     def prepare_data(self, df):
-        """آماده‌سازی داده‌ها برای آموزش"""
-        # جداسازی features و target
+        """Prepare data for training"""
+        # Separate features and target
         X = df.drop(['target', 'target_return'], axis=1)
         y = df['target'].astype(int)  # classification target
         
-        # تقسیم زمانی (Time Series Split)
+        # Time-based split
         split_idx = int(len(X) * settings.TRAIN_TEST_SPLIT)
         
         X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
@@ -52,10 +57,10 @@ class MLModelTrainer:
         return X_train, X_test, y_train, y_test
     
     def train_random_forest(self, X_train, y_train):
-        """آموزش Random Forest"""
-        print("آموزش Random Forest...")
+        """Train Random Forest model"""
+        print("Training Random Forest...")
         
-        # پارامترهای برای tuning
+        # Parameters for tuning
         param_grid = {
             'n_estimators': [100, 200],
             'max_depth': [10, 20, None],
@@ -63,10 +68,10 @@ class MLModelTrainer:
             'min_samples_leaf': [1, 2]
         }
         
-        # استفاده از TimeSeriesSplit برای cross-validation
+        # Use TimeSeriesSplit for cross-validation
         tscv = TimeSeriesSplit(n_splits=5)
         
-        # مدل پایه
+        # Base model
         rf = RandomForestClassifier(
             random_state=settings.RANDOM_SEED,
             n_jobs=-1,
@@ -84,48 +89,16 @@ class MLModelTrainer:
         
         grid_search.fit(X_train, y_train)
         
-        print(f"بهترین پارامترها: {grid_search.best_params_}")
-        print(f"بهترین امتیاز: {grid_search.best_score_:.4f}")
+        print(f"Best parameters: {grid_search.best_params_}")
+        print(f"Best score: {grid_search.best_score_:.4f}")
         
         return grid_search.best_estimator_
     
-    def train_xgboost(self, X_train, y_train):
-        """آموزش XGBoost"""
-        print("آموزش XGBoost...")
-        
-        # پارامترها
-        param_grid = {
-            'n_estimators': [100, 200],
-            'max_depth': [3, 5, 7],
-            'learning_rate': [0.01, 0.1],
-            'subsample': [0.8, 1.0]
-        }
-        
-        tscv = TimeSeriesSplit(n_splits=5)
-        
-        xgb = XGBClassifier(
-            random_state=settings.RANDOM_SEED,
-            n_jobs=-1,
-            eval_metric='logloss',
-            use_label_encoder=False
-        )
-        
-        grid_search = GridSearchCV(
-            xgb, param_grid,
-            cv=tscv,
-            scoring='f1',
-            n_jobs=-1,
-            verbose=1
-        )
-        
-        grid_search.fit(X_train, y_train)
-        
-        print(f"بهترین پارامترهای XGBoost: {grid_search.best_params_}")
-        return grid_search.best_estimator_
+    
     
     def train_lightgbm(self, X_train, y_train):
-        """آموزش LightGBM"""
-        print("آموزش LightGBM...")
+        """Train LightGBM model"""
+        print("Training LightGBM...")
         
         lgbm = LGBMClassifier(
             n_estimators=200,
@@ -139,8 +112,8 @@ class MLModelTrainer:
         return lgbm
     
     def train_logistic_regression(self, X_train, y_train):
-        """آموزش Logistic Regression"""
-        print("آموزش Logistic Regression...")
+        """Train Logistic Regression model"""
+        print("Training Logistic Regression...")
         
         lr = LogisticRegression(
             random_state=settings.RANDOM_SEED,
@@ -153,7 +126,7 @@ class MLModelTrainer:
         return lr
     
     def evaluate_model(self, model, X_test, y_test, model_name):
-        """ارزیابی مدل"""
+        """Evaluate model performance"""
         y_pred = model.predict(X_test)
         y_pred_proba = model.predict_proba(X_test)[:, 1]
         
@@ -165,39 +138,39 @@ class MLModelTrainer:
             'model': model_name
         }
         
-        print(f"\nارزیابی {model_name}:")
+        print(f"\nEvaluation of {model_name}:")
         print(f"Accuracy: {metrics['accuracy']:.4f}")
         print(f"Precision: {metrics['precision']:.4f}")
         print(f"Recall: {metrics['recall']:.4f}")
         print(f"F1-Score: {metrics['f1']:.4f}")
         
-        # نمایش confusion matrix
+        # Show confusion matrix
         cm = confusion_matrix(y_test, y_pred)
         print(f"Confusion Matrix:\n{cm}")
         
-        # classification report
+        # Classification report
         print(f"\nClassification Report:")
         print(classification_report(y_test, y_pred))
         
         return metrics, y_pred_proba
     
     def train_all_models(self, symbol):
-        """آموزش تمام مدل‌های ML برای یک جفت ارز"""
+        """Train all ML models for a currency pair"""
         print(f"\n{'='*50}")
-        print(f"آموزش مدل‌های ML برای {symbol}")
+        print(f"Training ML models for {symbol}")
         print(f"{'='*50}")
         
-        # بارگذاری داده‌ها
+        # Load data
         df = self.load_features(symbol)
         if df is None:
-            print(f"داده‌ای برای {symbol} یافت نشد")
+            print(f"No data found for {symbol}")
             return None
         
-        # آماده‌سازی داده‌ها
+        # Prepare data
         X_train, X_test, y_train, y_test = self.prepare_data(df)
-        print(f"تعداد نمونه‌ها - Train: {len(X_train)}, Test: {len(X_test)}")
+        print(f"Sample counts - Train: {len(X_train)}, Test: {len(X_test)}")
         
-        # آموزش مدل‌ها
+        # Train models
         models = {}
         predictions = {}
         metrics_list = []
@@ -230,24 +203,24 @@ class MLModelTrainer:
         metrics_list.append(lr_metrics)
         predictions['logistic_regression'] = lr_preds
         
-        # ذخیره مدل‌ها
+        # Save models
         for model_name, model in models.items():
             model_path = self.models_dir / f"{symbol}_{model_name}.pkl"
             joblib.dump(model, model_path)
-            print(f"مدل {model_name} در {model_path} ذخیره شد")
+            print(f"Model {model_name} saved to {model_path}")
         
-        # ذخیره نتایج
+        # Save results
         results_df = pd.DataFrame(metrics_list)
         results_path = self.models_dir / f"{symbol}_ml_results.csv"
         results_df.to_csv(results_path)
         
-        # ذخیره predictions
+        # Save predictions
         preds_df = pd.DataFrame(predictions, index=X_test.index)
         preds_df['actual'] = y_test.values
         preds_path = self.models_dir / f"{symbol}_predictions.csv"
         preds_df.to_csv(preds_path)
         
-        print(f"\nنتایج آموزش برای {symbol} ذخیره شد")
+        print(f"\nTraining results for {symbol} saved")
         
         return {
             'models': models,
@@ -258,10 +231,10 @@ class MLModelTrainer:
         }
     
     def train_for_all_pairs(self):
-        """آموزش مدل‌ها برای تمام جفت‌ارزها"""
+        """Train models for all currency pairs"""
         all_results = {}
         
-        for pair in settings.FOREX_PAIRS[:2]:  # برای شروع دو جفت
+        for pair in settings.FOREX_PAIRS[:2]:  # Start with two pairs
             results = self.train_all_models(pair)
             if results:
                 all_results[pair] = results
@@ -271,4 +244,4 @@ class MLModelTrainer:
 if __name__ == "__main__":
     trainer = MLModelTrainer()
     results = trainer.train_for_all_pairs()
-    print(f"آموزش مدل‌های ML برای {len(results)} جفت کامل شد")
+    print(f"ML model training completed for {len(results)} pairs")

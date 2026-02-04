@@ -1,5 +1,6 @@
+
 """
-آموزش مدل‌های Deep Learning (LSTM, CNN, Attention)
+Training Deep Learning Models (LSTM, CNN, Attention)
 """
 
 import numpy as np
@@ -30,7 +31,7 @@ import joblib
 from config.settings import settings
 
 class DLModelTrainer:
-    """کلاس آموزش مدل‌های Deep Learning"""
+    """Deep Learning Model Trainer Class"""
     
     def __init__(self):
         self.processed_dir = Path(settings.PROCESSED_DATA_DIR)
@@ -38,7 +39,7 @@ class DLModelTrainer:
         self.models_dir.mkdir(parents=True, exist_ok=True)
         
     def create_sequences(self, data, sequence_length=60):
-        """ایجاد sequences برای مدل‌های مبتنی بر زمان"""
+        """Create sequences for time-based models"""
         sequences = []
         targets = []
         
@@ -51,7 +52,7 @@ class DLModelTrainer:
         return np.array(sequences), np.array(targets)
     
     def build_lstm_model(self, input_shape):
-        """ساخت مدل LSTM"""
+        """Build LSTM model"""
         model = Sequential([
             Input(shape=input_shape),
             LSTM(128, return_sequences=True, kernel_regularizer=l2(0.001)),
@@ -74,7 +75,7 @@ class DLModelTrainer:
         return model
     
     def build_bidirectional_lstm(self, input_shape):
-        """ساخت مدل Bidirectional LSTM"""
+        """Build Bidirectional LSTM model"""
         model = Sequential([
             Input(shape=input_shape),
             Bidirectional(LSTM(64, return_sequences=True)),
@@ -93,7 +94,7 @@ class DLModelTrainer:
         return model
     
     def build_lstm_with_attention(self, input_shape):
-        """ساخت مدل LSTM با Attention Mechanism"""
+        """Build LSTM model with Attention Mechanism"""
         inputs = Input(shape=input_shape)
         
         # LSTM layers
@@ -118,7 +119,7 @@ class DLModelTrainer:
         return model
     
     def build_cnn_lstm_hybrid(self, input_shape):
-        """ساخت مدل ترکیبی CNN-LSTM"""
+        """Build CNN-LSTM hybrid model"""
         model = Sequential([
             Input(shape=input_shape),
             
@@ -148,36 +149,36 @@ class DLModelTrainer:
         return model
     
     def create_custom_loss(self):
-        """ایجاد loss function سفارشی با توجه به financial metrics"""
+        """Create custom loss function considering financial metrics"""
         def sharpe_loss(y_true, y_pred):
-            # محاسبه returns بر اساس پیش‌بینی
+            # Calculate returns based on prediction
             returns = y_pred * y_true
             
-            # محاسبه Sharpe Ratio
+            # Calculate Sharpe Ratio
             mean_return = keras.backend.mean(returns)
             std_return = keras.backend.std(returns)
             sharpe_ratio = mean_return / (std_return + keras.backend.epsilon())
             
-            # minimize negative sharpe (maximize sharpe)
+            # Minimize negative sharpe (maximize sharpe)
             return -sharpe_ratio
         
         return sharpe_loss
     
     def train_dl_model(self, symbol):
-        """آموزش مدل Deep Learning برای یک جفت ارز"""
+        """Train Deep Learning model for a currency pair"""
         print(f"\n{'='*50}")
-        print(f"آموزش مدل‌های DL برای {symbol}")
+        print(f"Training DL models for {symbol}")
         print(f"{'='*50}")
         
-        # بارگذاری داده‌ها
+        # Load data
         features_path = self.processed_dir / f"{symbol}_features.csv"
         if not features_path.exists():
-            print(f"فایل features برای {symbol} یافت نشد")
+            print(f"Features file for {symbol} not found")
             return None
         
         df = pd.read_csv(features_path, index_col=0, parse_dates=True)
         
-        # جدا کردن features و target
+        # Separate features and target
         X = df.drop(['target', 'target_return'], axis=1).values
         y = df['target'].values.astype(float)
         
@@ -185,27 +186,27 @@ class DLModelTrainer:
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
         
-        # ایجاد sequences
+        # Create sequences
         sequence_length = settings.FEATURE_WINDOW
         X_seq, y_seq = self.create_sequences(
             np.column_stack([X_scaled, y]), 
             sequence_length
         )
         
-        # تقسیم داده‌ها
+        # Split data
         split_idx = int(len(X_seq) * settings.TRAIN_TEST_SPLIT)
         X_train, X_test = X_seq[:split_idx], X_seq[split_idx:]
         y_train, y_test = y_seq[:split_idx], y_seq[split_idx:]
         
-        print(f"تعداد sequences - Train: {len(X_train)}, Test: {len(X_test)}")
+        print(f"Number of sequences - Train: {len(X_train)}, Test: {len(X_test)}")
         print(f"Shape X_train: {X_train.shape}, y_train: {y_train.shape}")
         
-        # ساخت مدل‌های مختلف
+        # Build different models
         input_shape = (sequence_length, X_train.shape[2])
         models = {}
         
-        # 1. مدل LSTM ساده
-        print("\n1. آموزش مدل LSTM...")
+        # 1. Simple LSTM model
+        print("\n1. Training LSTM model...")
         lstm_model = self.build_lstm_model(input_shape)
         lstm_model.compile(
             optimizer=Adam(learning_rate=0.001),
@@ -227,8 +228,8 @@ class DLModelTrainer:
         
         models['lstm'] = lstm_model
         
-        # 2. مدل LSTM با Attention
-        print("\n2. آموزش مدل LSTM with Attention...")
+        # 2. LSTM with Attention model
+        print("\n2. Training LSTM with Attention model...")
         attention_model = self.build_lstm_with_attention(input_shape)
         attention_model.compile(
             optimizer=Adam(learning_rate=0.0005),
@@ -254,8 +255,8 @@ class DLModelTrainer:
         
         models['attention'] = attention_model
         
-        # 3. مدل ترکیبی CNN-LSTM
-        print("\n3. آموزش مدل CNN-LSTM Hybrid...")
+        # 3. CNN-LSTM Hybrid model
+        print("\n3. Training CNN-LSTM Hybrid model...")
         cnn_lstm_model = self.build_cnn_lstm_hybrid(input_shape)
         cnn_lstm_model.compile(
             optimizer=Adam(learning_rate=0.001),
@@ -277,18 +278,18 @@ class DLModelTrainer:
         
         models['cnn_lstm'] = cnn_lstm_model
         
-        # ارزیابی مدل‌ها
+        # Evaluate models
         results = {}
         predictions = {}
         
         for model_name, model in models.items():
-            print(f"\nارزیابی مدل {model_name}...")
+            print(f"\nEvaluating {model_name} model...")
             
-            # پیش‌بینی
+            # Predict
             y_pred = model.predict(X_test)
             y_pred_binary = (y_pred > 0.5).astype(int)
             
-            # محاسبه metrics
+            # Calculate metrics
             from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
             
             metrics = {
@@ -307,28 +308,28 @@ class DLModelTrainer:
             print(f"Recall: {metrics['recall']:.4f}")
             print(f"F1-Score: {metrics['f1']:.4f}")
         
-        # ذخیره مدل‌ها
+        # Save models
         for model_name, model in models.items():
             model_path = self.models_dir / f"{symbol}_{model_name}.h5"
             model.save(model_path)
-            print(f"مدل {model_name} در {model_path} ذخیره شد")
+            print(f"Model {model_name} saved to {model_path}")
         
-        # ذخیره results
+        # Save results
         results_df = pd.DataFrame(results.values())
         results_path = self.models_dir / f"{symbol}_dl_results.csv"
         results_df.to_csv(results_path)
         
-        # ذخیره predictions
+        # Save predictions
         preds_df = pd.DataFrame(predictions)
         preds_df['actual'] = y_test
         preds_path = self.models_dir / f"{symbol}_dl_predictions.csv"
         preds_df.to_csv(preds_path)
         
-        # ذخیره scaler
+        # Save scaler
         scaler_path = self.models_dir / f"{symbol}_scaler.pkl"
         joblib.dump(scaler, scaler_path)
         
-        print(f"\nآموزش مدل‌های DL برای {symbol} کامل شد")
+        print(f"\nDL model training for {symbol} completed")
         
         return {
             'models': models,
@@ -339,10 +340,10 @@ class DLModelTrainer:
         }
     
     def train_for_all_pairs(self):
-        """آموزش مدل‌های DL برای تمام جفت‌ارزها"""
+        """Train DL models for all currency pairs"""
         dl_results = {}
         
-        for pair in settings.FOREX_PAIRS[:2]:  # برای شروع دو جفت
+        for pair in settings.FOREX_PAIRS[:2]:  # Start with two pairs
             results = self.train_dl_model(pair)
             if results:
                 dl_results[pair] = results
@@ -352,4 +353,4 @@ class DLModelTrainer:
 if __name__ == "__main__":
     trainer = DLModelTrainer()
     results = trainer.train_for_all_pairs()
-    print(f"آموزش مدل‌های DL برای {len(results)} جفت کامل شد")
+    print(f"DL model training completed for {len(results)} pairs")

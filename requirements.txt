@@ -5,7 +5,7 @@ pandas
 numpy
 yfinance
 # ccxt
-ccxt==4.0.107
+ccxt==4.0.107ck
 alpha-vantage
 requests
 
@@ -32,18 +32,20 @@ matplotlib
 seaborn
 plotly
 mplfinance
-
+scikit-learn 
+tensorflow
 # دپلوی و دشبورد
 streamlit
 fastapi
 uvicorn
-
+xgboost
+lightgbm
 # ابزارها
 python-dotenv
 joblib
 tqdm
 jupyter
-
+ta-lib
 
 # # داده و پردازش
 # pandas

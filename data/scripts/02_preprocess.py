@@ -1,17 +1,24 @@
+
 """
-پیش‌پردازش داده‌های فارکس
+Forex Data Preprocessing
 """
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
+
 import warnings
 warnings.filterwarnings('ignore')
+import os
+import sys
+# Add project root to Python path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 from config.settings import settings
 
 class ForexDataPreprocessor:
-    """کلاس پیش‌پردازش داده‌های فارکس"""
+    """Forex Data Preprocessor Class"""
     
     def __init__(self):
         self.raw_dir = Path(settings.RAW_DATA_DIR)
@@ -19,84 +26,84 @@ class ForexDataPreprocessor:
         self.processed_dir.mkdir(parents=True, exist_ok=True)
     
     def load_raw_data(self, symbol):
-        """بارگذاری داده‌های خام"""
+        """Load raw data"""
         file_pattern = f"{symbol}_*.csv"
         files = list(self.raw_dir.glob(file_pattern))
         
         if not files:
-            print(f"فایلی برای {symbol} یافت نشد")
+            print(f"No file found for {symbol}")
             return None
         
-        # استفاده از اولین فایل موجود
+        # Use the first available file
         file_path = files[0]
         df = pd.read_csv(file_path, index_col=0, parse_dates=True)
         
-        # اطمینان از ترتیب زمانی
+        # Ensure chronological order
         df.sort_index(inplace=True)
         
         return df
     
     def clean_data(self, df):
-        """پاکسازی داده‌ها"""
-        # حذف سطرهای با مقادیر NaN
+        """Clean data"""
+        # Remove rows with NaN values
         initial_len = len(df)
         df = df.dropna()
         
-        # حذف outliers (قیمت‌های غیرمعمول)
+        # Remove outliers (unusual prices)
         for col in ['open', 'high', 'low', 'close']:
             q1 = df[col].quantile(0.01)
             q3 = df[col].quantile(0.99)
             df = df[(df[col] >= q1) & (df[col] <= q3)]
         
-        # بررسی gaps در داده‌ها
+        # Handle data gaps
         df = self._handle_data_gaps(df)
         
-        print(f"داده‌ها از {initial_len} به {len(df)} رکورد پاکسازی شد")
+        print(f"Data cleaned from {initial_len} to {len(df)} records")
         return df
     
     def _handle_data_gaps(self, df):
-        """مدیریت gaps زمانی در داده‌ها"""
-        # ایجاد بازه زمانی کامل
+        """Handle time gaps in data"""
+        # Create complete time range
         full_range = pd.date_range(
             start=df.index.min(),
             end=df.index.max(),
             freq='1H'
         )
         
-        # reindex کردن برای داشتن تمام ساعات
+        # Reindex to have all hours
         df = df.reindex(full_range)
         
-        # forward fill برای داده‌های گمشده
+        # Forward fill for missing data
         df = df.ffill()
         
-        # backward fill برای ابتدای داده‌ها
+        # Backward fill for beginning of data
         df = df.bfill()
         
         return df
     
     def calculate_returns(self, df):
-        """محاسبه بازده‌ها"""
-        # بازده ساده
+        """Calculate returns"""
+        # Simple return
         df['returns'] = df['close'].pct_change()
         
-        # بازده لگاریتمی
+        # Logarithmic return
         df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
         
-        # بازده نوسانی
+        # Volatility
         df['volatility_20'] = df['log_returns'].rolling(window=20).std()
         
         return df
     
     def add_time_features(self, df):
-        """اضافه کردن ویژگی‌های زمانی"""
-        # ویژگی‌های زمانی
+        """Add time-based features"""
+        # Time features
         df['hour'] = df.index.hour
         df['day_of_week'] = df.index.dayofweek
         df['day_of_month'] = df.index.day
         df['month'] = df.index.month
         df['week_of_year'] = df.index.isocalendar().week
         
-        # سشن‌های معاملاتی
+        # Trading sessions
         df['london_session'] = ((df['hour'] >= 8) & (df['hour'] <= 16)).astype(int)
         df['ny_session'] = ((df['hour'] >= 13) & (df['hour'] <= 21)).astype(int)
         df['asia_session'] = ((df['hour'] >= 22) | (df['hour'] <= 6)).astype(int)
@@ -104,48 +111,48 @@ class ForexDataPreprocessor:
         return df
     
     def create_target_variable(self, df, horizon=5):
-        """ایجاد متغیر هدف برای classification"""
-        # جهت حرکت در افق زمانی مشخص
+        """Create target variable for classification"""
+        # Direction of movement in specified time horizon
         future_return = df['close'].shift(-horizon) / df['close'] - 1
         
-        # classification: 1 برای بالا رفتن، 0 برای پایین آمدن
+        # Classification: 1 for upward movement, 0 for downward movement
         df['target'] = (future_return > 0).astype(int)
         
-        # regression target: درصد تغییرات
+        # Regression target: percentage change
         df['target_return'] = future_return
         
         return df
     
     def process_pair(self, symbol):
-        """پیش‌پردازش کامل یک جفت ارز"""
-        print(f"پیش‌پردازش {symbol}...")
+        """Complete preprocessing of a currency pair"""
+        print(f"Processing {symbol}...")
         
-        # بارگذاری داده‌ها
+        # Load data
         df = self.load_raw_data(symbol)
         if df is None:
             return None
         
-        # پاکسازی
+        # Clean
         df = self.clean_data(df)
         
-        # محاسبه بازده‌ها
+        # Calculate returns
         df = self.calculate_returns(df)
         
-        # اضافه کردن ویژگی‌های زمانی
+        # Add time features
         df = self.add_time_features(df)
         
-        # ایجاد متغیر هدف
+        # Create target variable
         df = self.create_target_variable(df, settings.PREDICTION_HORIZON)
         
-        # ذخیره داده‌های پردازش شده
+        # Save processed data
         output_path = self.processed_dir / f"{symbol}_processed.csv"
         df.to_csv(output_path)
         
-        print(f"داده‌های {symbol} در {output_path} ذخیره شد")
+        print(f"Data for {symbol} saved to {output_path}")
         return df
     
     def process_all_pairs(self):
-        """پیش‌پردازش تمام جفت‌ارزها"""
+        """Preprocess all currency pairs"""
         processed_data = {}
         
         for pair in settings.FOREX_PAIRS[:3]:
@@ -158,4 +165,4 @@ class ForexDataPreprocessor:
 if __name__ == "__main__":
     preprocessor = ForexDataPreprocessor()
     data = preprocessor.process_all_pairs()
-    print(f"{len(data)} جفت ارز پردازش شد")
+    print(f"{len(data)} currency pairs processed")

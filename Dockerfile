@@ -1,102 +1,63 @@
-# Stage 1: Base Image with system dependencies
-FROM python:3.9-slim as base
+# Dockerfile - Python 3.12
+FROM python:3.12-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
+# تنظیمات سیستم
+ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    PIP_DEFAULT_TIMEOUT=100 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 1. نصب system dependencies
+RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
-    build-essential \
+    make \
     wget \
     curl \
     git \
-    libgomp1 \
+    build-essential \
+    libpq-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install TA-Lib dependencies and build
-RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
-    && tar -xzf ta-lib-0.4.0-src.tar.gz \
-    && cd ta-lib \
-    && ./configure --prefix=/usr \
-    && make \
-    && make install \
-    && cd .. \
-    && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+# 2. نصب TA-Lib (اختیاری - می‌تونید کامنت کنید اگر مشکل داشت)
+# RUN wget -q http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
+#     && tar -xzf ta-lib-0.4.0-src.tar.gz \
+#     && cd ta-lib/ \
+#     && ./configure --prefix=/usr \
+#     && make \
+#     && make install \
+#     && cd .. \
+#     && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# Stage 2: Dependencies installation
-FROM base as dependencies
+# 3. آپدیت pip
+RUN pip install --no-cache-dir --upgrade pip==24.0 wheel==0.42.0 setuptools==70.0.0
 
-# Copy requirements file
+# 4. ابتدا پکیج‌های اصلی را نصب کن
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    pandas==2.2.0 \
+    scipy==1.13.0 \
+    scikit-learn==1.4.1.post1 \
+    cython==3.0.10
+
+# 5. کپی requirements
 COPY requirements.txt .
 
-# Upgrade pip and install Python dependencies
-RUN pip install --upgrade pip setuptools wheel
+# 6. نصب بقیه پکیج‌ها
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 3: Development stage (for model training)
-FROM dependencies as development
-
-# Copy project files
+# 7. کپی کدهای پروژه
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p /app/data/raw \
-    /app/data/processed \
-    /app/models/ml \
-    /app/models/dl \
-    /app/models/ensemble \
-    /app/trading/backtesting/results \
-    /app/dashboard/static
+# 8. ایجاد پوشه‌ها
+RUN mkdir -p /app/data/raw /app/data/processed /app/models /app/logs /app/results
 
-# Set permissions
-RUN chmod +x /app/main.py \
-    && chmod +x /app/data/scripts/*.py \
-    && chmod +x /app/models/*/*.py \
-    && chmod +x /app/trading/*/*.py \
-    && chmod +x /app/trading/backtesting/backtester.py
+# 9. پورت‌ها
+EXPOSE 8501 8000 8888
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8501/_stcore/health', timeout=2)" || exit 1
-
-# Expose ports
-EXPOSE 8501  # Streamlit
-EXPOSE 8000  # FastAPI (if added later)
-
-# Default command (run dashboard)
-CMD ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
-
-# Stage 4: Production stage (lightweight)
-FROM python:3.9-slim as production
-
-# Copy only necessary files from development stage
-COPY --from=development /usr/lib /usr/lib
-COPY --from=development /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
-COPY --from=development /app /app
-
-# Set working directory
-WORKDIR /app
-
-# Create non-root user
-RUN useradd -m -u 1000 forexuser && \
-    chown -R forexuser:forexuser /app
-
-USER forexuser
-
-# Expose ports
-EXPOSE 8501
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8501/_stcore/health', timeout=2)" || exit 1
-
-# Run dashboard
-CMD ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# 10. نقطه ورود
+CMD ["python", "main.py", "--mode", "train"]

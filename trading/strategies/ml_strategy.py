@@ -1,380 +1,243 @@
-"""
-استراتژی‌های معاملاتی مبتنی بر ML
-"""
-
-import backtrader as bt
-import numpy as np
+# trading/strategies/ml_strategy.py
 import pandas as pd
-import joblib
+import numpy as np
+from typing import Dict, List, Tuple, Optional
+import pickle
 from pathlib import Path
+import sys
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from config.settings import settings
+from config.settings import trading_config, path_config
+from loguru import logger
 
-class MLStrategy(bt.Strategy):
-    """
-    استراتژی معاملاتی مبتنی بر مدل‌های یادگیری ماشین
-    """
+class MLTradingStrategy:
+    """استراتژی معاملاتی مبتنی بر ML"""
     
-    params = (
-        ('symbol', 'EURUSD'),
-        ('position_size_pct', 0.02),
-        ('stop_loss_pct', 0.02),
-        ('take_profit_pct', 0.04),
-        ('use_ensemble', True),
-    )
-    
-    def __init__(self):
-        # ذخیره مراجع به داده‌ها
-        self.dataclose = self.datas[0].close
-        self.dataopen = self.datas[0].open
-        self.datahigh = self.datas[0].high
-        self.datalow = self.datas[0].low
+    def __init__(self, symbol: str = 'EURUSD'):
+        self.symbol = symbol
+        self.models_dir = Path(path_config.ML_MODELS_DIR)
+        self.models = {}
+        self.scaler = None
         
-        # اندیکاتورهای تکنیکال
-        self.sma20 = bt.indicators.SimpleMovingAverage(
-            self.datas[0].close, period=20
-        )
-        self.sma50 = bt.indicators.SimpleMovingAverage(
-            self.datas[0].close, period=50
-        )
-        self.rsi = bt.indicators.RSI(
-            self.datas[0].close, period=14
-        )
-        self.macd = bt.indicators.MACD(
-            self.datas[0].close
-        )
+        # بارگذاری مدل‌ها
+        self.load_models()
         
-        # بارگذاری مدل‌های ML
-        self.models = self.load_models()
-        
-        # ذخیره سیگنال‌ها
-        self.signals = []
-        self.predictions = []
-        
-        # متغیرهای معاملاتی
-        self.order = None
-        self.buyprice = None
-        self.buycomm = None
-        self.trade_count = 0
-        self.win_count = 0
-        
-        # توقف ضرر و حد سود
-        self.stop_loss = None
-        self.take_profit = None
+        # وضعیت معاملات
+        self.position = 0  # 0: no position, 1: long, -1: short
+        self.entry_price = 0
+        self.stop_loss = 0
+        self.take_profit = 0
         
     def load_models(self):
         """بارگذاری مدل‌های آموزش دیده"""
         try:
-            models_dir = Path(settings.MODELS_DIR)
+            # بارگذاری scaler
+            scaler_path = self.models_dir / f"{self.symbol}_scaler.pkl"
+            if scaler_path.exists():
+                with open(scaler_path, 'rb') as f:
+                    self.scaler = pickle.load(f)
             
-            if self.p.use_ensemble:
-                # بارگذاری مدل ensemble
-                ensemble_path = models_dir / "ensemble" / f"{self.p.symbol}_ensemble.pkl"
-                if ensemble_path.exists():
-                    return joblib.load(ensemble_path)
+            # بارگذاری مدل‌ها
+            models_to_load = {
+                'random_forest': f"{self.symbol}_random_forest.pkl",
+                'xgboost': f"{self.symbol}_xgboost.pkl",
+                'lightgbm': f"{self.symbol}_lightgbm.pkl"
+            }
             
-            # بارگذاری مدل Random Forest به عنوان fallback
-            rf_path = models_dir / "ml" / f"{self.p.symbol}_random_forest.pkl"
-            if rf_path.exists():
-                return {'random_forest': joblib.load(rf_path)}
+            for model_name, filename in models_to_load.items():
+                model_path = self.models_dir / filename
+                if model_path.exists():
+                    with open(model_path, 'rb') as f:
+                        self.models[model_name] = pickle.load(f)
+                        logger.info(f"Loaded {model_name} model")
+            
+            if not self.models:
+                logger.warning("No ML models found!")
                 
         except Exception as e:
-            print(f"خطا در بارگذاری مدل‌ها: {e}")
-        
-        return None
+            logger.error(f"Error loading models: {e}")
     
-    def calculate_features(self):
-        """محاسبه ویژگی‌ها از داده‌های کنونی"""
-        features = {}
+    def prepare_features(self, df: pd.DataFrame, lookback: int = 60) -> np.ndarray:
+        """آماده‌سازی ویژگی‌ها برای پیش‌بینی"""
+        if len(df) < lookback:
+            return None
         
-        # قیمت‌ها
-        features['close'] = self.dataclose[0]
-        features['open'] = self.dataopen[0]
-        features['high'] = self.datahigh[0]
-        features['low'] = self.datalow[0]
+        # گرفتن آخرین lookback دوره
+        recent_data = df.iloc[-lookback:].copy()
         
-        # بازده‌ها
-        if len(self.dataclose) > 1:
-            features['returns'] = (self.dataclose[0] - self.dataclose[-1]) / self.dataclose[-1]
-            features['log_returns'] = np.log(self.dataclose[0] / self.dataclose[-1])
+        # استخراج features
+        feature_cols = [col for col in recent_data.columns 
+                       if not col.startswith('label_')]
         
-        # اندیکاتورها
-        features['sma20'] = self.sma20[0]
-        features['sma50'] = self.sma50[0]
-        features['rsi'] = self.rsi[0]
-        features['macd'] = self.macd.macd[0]
-        features['macd_signal'] = self.macd.signal[0]
+        features = recent_data[feature_cols].values
         
-        # سایر ویژگی‌ها
-        features['high_low_pct'] = (self.datahigh[0] - self.datalow[0]) / self.dataclose[0] * 100
-        features['close_open_pct'] = (self.dataclose[0] - self.dataopen[0]) / self.dataopen[0] * 100
+        # Standardization
+        if self.scaler is not None:
+            features = self.scaler.transform(features)
         
-        # ویژگی‌های زمانی
-        features['hour'] = self.data.datetime.time().hour
-        features['day_of_week'] = self.data.datetime.date().weekday()
-        
-        return pd.DataFrame([features])
+        # تغییر شکل برای مدل‌های مختلف
+        return features.flatten().reshape(1, -1)
     
-    def generate_signal(self):
-        """تولید سیگنال از مدل‌های ML"""
-        if self.models is None:
-            return 0.5  # سیگنال خنثی
+    def ensemble_prediction(self, features: np.ndarray) -> Tuple[float, float]:
+        """پیش‌بینی ensemble با ترکیب مدل‌ها"""
+        if not self.models or features is None:
+            return 0.5, 0.0  # خنثی
         
-        try:
-            # محاسبه ویژگی‌ها
-            features_df = self.calculate_features()
-            
-            if self.p.use_ensemble and 'meta_ensemble' in self.models:
-                # استفاده از ensemble
-                meta_model = self.models['meta_ensemble']
-                prediction = meta_model.predict_proba(features_df.values)[0, 1]
-            elif 'random_forest' in self.models:
-                # استفاده از Random Forest
-                rf_model = self.models['random_forest']
-                prediction = rf_model.predict_proba(features_df.values)[0, 1]
-            else:
-                prediction = 0.5
-            
-            return prediction
-            
-        except Exception as e:
-            print(f"خطا در تولید سیگنال: {e}")
-            return 0.5
-    
-    def calculate_position_size(self):
-        """محاسبه اندازه پوزیشن با Kelly Criterion"""
-        account_value = self.broker.getvalue()
+        predictions = []
+        probabilities = []
+        weights = {'random_forest': 0.4, 'xgboost': 0.4, 'lightgbm': 0.2}
         
-        # Kelly Criterion اصلاح‌شده
-        if self.trade_count > 0:
-            win_rate = self.win_count / self.trade_count
-            avg_win = 0.04  # فرضی
-            avg_loss = 0.02  # فرضی
-            
-            if avg_loss > 0:
-                kelly_f = win_rate - ((1 - win_rate) / (avg_win / avg_loss))
-                kelly_f = max(0, min(kelly_f, 0.5))  # محدود کردن
-            else:
-                kelly_f = 0.1
-        else:
-            kelly_f = 0.1
-        
-        position_value = account_value * kelly_f * self.p.position_size_pct
-        size = position_value / self.dataclose[0]
-        
-        return size
-    
-    def next(self):
-        # اگر سفارش معلقی داریم، منتظر می‌مانیم
-        if self.order:
-            return
-        
-        # تولید سیگنال
-        signal_prob = self.generate_signal()
-        
-        # ذخیره سیگنال
-        self.signals.append(signal_prob)
-        self.predictions.append(signal_prob)
-        
-        # اگر در پوزیشن نیستیم
-        if not self.position:
-            # سیگنال خرید قوی
-            if signal_prob > 0.7:
-                self.buy_signal()
-            # سیگنال فروش قوی (Short)
-            elif signal_prob < 0.3:
-                self.sell_signal()
-        
-        # مدیریت پوزیشن باز
-        else:
-            self.manage_position(signal_prob)
-    
-    def buy_signal(self):
-        """اجرای سفارش خرید"""
-        size = self.calculate_position_size()
-        
-        if size > 0:
-            # خرید با حد ضرر و حد سود
-            self.order = self.buy(size=size)
-            
-            # تنظیم حد ضرر
-            stop_price = self.dataclose[0] * (1 - self.p.stop_loss_pct)
-            self.stop_loss = self.sell(
-                exectype=bt.Order.Stop, 
-                price=stop_price, 
-                size=size,
-                parent=self.order
-            )
-            
-            # تنظیم حد سود
-            take_profit_price = self.dataclose[0] * (1 + self.p.take_profit_pct)
-            self.take_profit = self.sell(
-                exectype=bt.Order.Limit, 
-                price=take_profit_price, 
-                size=size,
-                parent=self.order
-            )
-            
-            self.log(f'BUY EXECUTED, Price: {self.dataclose[0]:.5f}, Size: {size:.2f}')
-    
-    def sell_signal(self):
-        """اجرای سفارش فروش (Short)"""
-        size = self.calculate_position_size()
-        
-        if size > 0:
-            # فروش استقراضی
-            self.order = self.sell(size=size)
-            
-            # تنظیم حد ضرر برای short
-            stop_price = self.dataclose[0] * (1 + self.p.stop_loss_pct)
-            self.stop_loss = self.buy(
-                exectype=bt.Order.Stop, 
-                price=stop_price, 
-                size=size,
-                parent=self.order
-            )
-            
-            # تنظیم حد سود برای short
-            take_profit_price = self.dataclose[0] * (1 - self.p.take_profit_pct)
-            self.take_profit = self.buy(
-                exectype=bt.Order.Limit, 
-                price=take_profit_price, 
-                size=size,
-                parent=self.order
-            )
-            
-            self.log(f'SELL EXECUTED, Price: {self.dataclose[0]:.5f}, Size: {size:.2f}')
-    
-    def manage_position(self, signal_prob):
-        """مدیریت پوزیشن باز"""
-        if self.position:
-            current_price = self.dataclose[0]
-            entry_price = self.position.price
-            
-            # محاسبه سود/زیان فعلی
-            if self.position.size > 0:  # Long position
-                pnl_pct = (current_price - entry_price) / entry_price
+        for model_name, model in self.models.items():
+            try:
+                if hasattr(model, 'predict_proba'):
+                    proba = model.predict_proba(features)[0][1]
+                    pred = 1 if proba > 0.5 else 0
+                else:
+                    pred = model.predict(features)[0]
+                    proba = pred if pred in [0, 1] else 0.5
                 
-                # اگر سیگنال تغییر کرده، بررسی خروج
-                if signal_prob < 0.4 and pnl_pct > 0:
-                    self.close()
-                    self.log(f'CLOSE LONG, Signal changed, PnL: {pnl_pct:.2%}')
+                predictions.append(pred * weights.get(model_name, 1/len(self.models)))
+                probabilities.append(proba * weights.get(model_name, 1/len(self.models)))
                 
-                # Trailing stop
-                if pnl_pct > 0.02:  # اگر 2% سود داریم
-                    new_stop = entry_price * 1.01  # حد ضرر را به 1% سود می‌بریم
-                    if new_stop > self.stop_loss.price:
-                        self.cancel(self.stop_loss)
-                        self.stop_loss = self.sell(
-                            exectype=bt.Order.Stop, 
-                            price=new_stop, 
-                            size=abs(self.position.size)
-                        )
-                        
+            except Exception as e:
+                logger.error(f"Error in {model_name} prediction: {e}")
+                continue
+        
+        if not predictions:
+            return 0.5, 0.0
+        
+        # میانگین وزن‌دار
+        avg_prediction = np.sum(predictions)
+        avg_probability = np.sum(probabilities)
+        
+        return avg_probability, avg_prediction
+    
+    def generate_signal(self, df: pd.DataFrame) -> Dict:
+        """تولید سیگنال معاملاتی"""
+        features = self.prepare_features(df)
+        
+        if features is None:
+            return {
+                'signal': 'HOLD',
+                'confidence': 0.0,
+                'prediction': 0.5,
+                'position': self.position
+            }
+        
+        # پیش‌بینی ensemble
+        probability, prediction = self.ensemble_prediction(features)
+        
+        # قوانین سیگنال‌دهی
+        signal = 'HOLD'
+        confidence = abs(probability - 0.5) * 2  # تبدیل به رنج 0-1
+        
+        # تصمیم‌گیری با threshold
+        buy_threshold = 0.6
+        sell_threshold = 0.4
+        
+        if probability > buy_threshold and self.position <= 0:
+            signal = 'BUY'
+        elif probability < sell_threshold and self.position >= 0:
+            signal = 'SELL'
+        
+        return {
+            'signal': signal,
+            'confidence': confidence,
+            'prediction': probability,
+            'position': self.position,
+            'features_shape': features.shape
+        }
+    
+    def calculate_position_size(self, capital: float, risk_per_trade: float = 0.01) -> float:
+        """محاسبه اندازه پوزیشن"""
+        position_size = capital * risk_per_trade
+        
+        # محدودیت‌های اضافی
+        max_position = capital * trading_config.MAX_POSITION_SIZE
+        position_size = min(position_size, max_position)
+        
+        return position_size
+    
+    def calculate_stop_loss_take_profit(self, entry_price: float, signal: str) -> Tuple[float, float]:
+        """محاسبه حد ضرر و حد سود"""
+        if signal == 'BUY':
+            stop_loss = entry_price * (1 - trading_config.STOP_LOSS_PERCENT)
+            take_profit = entry_price * (1 + trading_config.TAKE_PROFIT_PERCENT)
+        elif signal == 'SELL':
+            stop_loss = entry_price * (1 + trading_config.STOP_LOSS_PERCENT)
+            take_profit = entry_price * (1 - trading_config.TAKE_PROFIT_PERCENT)
+        else:
+            return 0, 0
+        
+        return stop_loss, take_profit
+    
+    def update_position(self, signal: str, current_price: float, capital: float) -> Dict:
+        """به‌روزرسانی پوزیشن"""
+        trade_info = {
+            'action': 'HOLD',
+            'position_size': 0,
+            'entry_price': 0,
+            'stop_loss': 0,
+            'take_profit': 0,
+            'pnl': 0
+        }
+        
+        # محاسبه سود/زیان پوزیشن فعلی
+        if self.position != 0:
+            if self.position > 0:  # Long position
+                trade_info['pnl'] = (current_price - self.entry_price) / self.entry_price
             else:  # Short position
-                pnl_pct = (entry_price - current_price) / entry_price
+                trade_info['pnl'] = (self.entry_price - current_price) / self.entry_price
+            
+            # بررسی stop loss و take profit
+            if (self.position > 0 and current_price <= self.stop_loss) or \
+               (self.position < 0 and current_price >= self.stop_loss):
+                trade_info['action'] = 'CLOSE_STOP_LOSS'
+                self.position = 0
                 
-                # اگر سیگنال تغییر کرده، بررسی خروج
-                if signal_prob > 0.6 and pnl_pct > 0:
-                    self.close()
-                    self.log(f'CLOSE SHORT, Signal changed, PnL: {pnl_pct:.2%}')
-    
-    def notify_order(self, order):
-        """مدیریت اطلاعیه‌های سفارش"""
-        if order.status in [order.Submitted, order.Accepted]:
-            return
+            elif (self.position > 0 and current_price >= self.take_profit) or \
+                 (self.position < 0 and current_price <= self.take_profit):
+                trade_info['action'] = 'CLOSE_TAKE_PROFIT'
+                self.position = 0
         
-        if order.status in [order.Completed]:
-            if order.isbuy():
-                self.buyprice = order.executed.price
-                self.buycomm = order.executed.comm
-                
-                self.log(
-                    f'BUY EXECUTED, Price: {order.executed.price:.5f}, '
-                    f'Cost: {order.executed.value:.2f}, '
-                    f'Comm: {order.executed.comm:.2f}'
-                )
-            else:
-                self.log(
-                    f'SELL EXECUTED, Price: {order.executed.price:.5f}, '
-                    f'Cost: {order.executed.value:.2f}, '
-                    f'Comm: {order.executed.comm:.2f}'
-                )
-                
-        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-            self.log('Order Canceled/Margin/Rejected')
+        # بررسی سیگنال جدید
+        if signal == 'BUY' and self.position <= 0:
+            if self.position < 0:  # Close short position first
+                trade_info['action'] = 'CLOSE_SHORT'
+                self.position = 0
+            
+            # Open long position
+            trade_info['action'] = 'BUY'
+            self.position = 1
+            self.entry_price = current_price
+            trade_info['entry_price'] = current_price
+            trade_info['position_size'] = self.calculate_position_size(capital)
+            
+            # محاسبه stop loss و take profit
+            self.stop_loss, self.take_profit = self.calculate_stop_loss_take_profit(
+                current_price, 'BUY'
+            )
+            trade_info['stop_loss'] = self.stop_loss
+            trade_info['take_profit'] = self.take_profit
+            
+        elif signal == 'SELL' and self.position >= 0:
+            if self.position > 0:  # Close long position first
+                trade_info['action'] = 'CLOSE_LONG'
+                self.position = 0
+            
+            # Open short position
+            trade_info['action'] = 'SELL'
+            self.position = -1
+            self.entry_price = current_price
+            trade_info['entry_price'] = current_price
+            trade_info['position_size'] = self.calculate_position_size(capital)
+            
+            # محاسبه stop loss و take profit
+            self.stop_loss, self.take_profit = self.calculate_stop_loss_take_profit(
+                current_price, 'SELL'
+            )
+            trade_info['stop_loss'] = self.stop_loss
+            trade_info['take_profit'] = self.take_profit
         
-        self.order = None
-    
-    def notify_trade(self, trade):
-        """مدیریت اطلاعیه‌های معامله"""
-        if not trade.isclosed:
-            return
-        
-        self.trade_count += 1
-        if trade.pnl > 0:
-            self.win_count += 1
-        
-        self.log(
-            f'TRADE CLOSED, '
-            f'PnL: {trade.pnl:.2f}, '
-            f'Net PnL: {trade.pnlcomm:.2f}, '
-            f'Win Rate: {self.win_count/self.trade_count:.2%}'
-        )
-    
-    def log(self, txt, dt=None):
-        """لاگ کردن"""
-        dt = dt or self.datas[0].datetime.date(0)
-        print(f'{dt.isoformat()} {txt}')
-    
-    def stop(self):
-        """پایان بکتست"""
-        self.log(f'پایان استراتژی. تعداد معاملات: {self.trade_count}')
-        self.log(f'نرخ برد: {self.win_count/max(1, self.trade_count):.2%}')
-
-
-class HybridStrategy(MLStrategy):
-    """
-    استراتژی ترکیبی ML + قوانین تکنیکال
-    """
-    
-    params = (
-        ('use_technical_rules', True),
-        ('rsi_overbought', 70),
-        ('rsi_oversold', 30),
-        ('macd_threshold', 0),
-    )
-    
-    def generate_signal(self):
-        """تولید سیگنال ترکیبی ML + تکنیکال"""
-        # سیگنال ML
-        ml_signal = super().generate_signal()
-        
-        if not self.p.use_technical_rules:
-            return ml_signal
-        
-        # قوانین تکنیکال
-        technical_signal = 0.5  # خنثی
-        
-        # قانون RSI
-        if self.rsi[0] > self.p.rsi_overbought:
-            technical_signal = 0.3  # فروش
-        elif self.rsi[0] < self.p.rsi_oversold:
-            technical_signal = 0.7  # خرید
-        
-        # قانون MACD
-        if self.macd.macd[0] > self.macd.signal[0] + self.p.macd_threshold:
-            technical_signal = max(technical_signal, 0.6)  # تمایل به خرید
-        elif self.macd.macd[0] < self.macd.signal[0] - self.p.macd_threshold:
-            technical_signal = min(technical_signal, 0.4)  # تمایل به فروش
-        
-        # قانون Moving Average
-        if self.dataclose[0] > self.sma20[0] > self.sma50[0]:
-            technical_signal = max(technical_signal, 0.65)  # روند صعودی
-        elif self.dataclose[0] < self.sma20[0] < self.sma50[0]:
-            technical_signal = min(technical_signal, 0.35)  # روند نزولی
-        
-        # ترکیب سیگنال‌ها (وزن بیشتر برای ML)
-        combined_signal = (ml_signal * 0.7) + (technical_signal * 0.3)
-        
-        return combined_signal
+        trade_info['position'] = self.position
+        return trade_info

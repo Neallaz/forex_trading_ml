@@ -1,168 +1,142 @@
-
-"""
-Forex Data Preprocessing
-"""
-
+# data/scripts/02_preprocess.py
 import pandas as pd
 import numpy as np
 from pathlib import Path
-
-import warnings
-warnings.filterwarnings('ignore')
-import os
 import sys
-# Add project root to Python path
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, PROJECT_ROOT)
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from config.settings import settings
+from config.settings import data_config, path_config
+from loguru import logger
 
-class ForexDataPreprocessor:
-    """Forex Data Preprocessor Class"""
-    
+class DataPreprocessor:
     def __init__(self):
-        self.raw_dir = Path(settings.RAW_DATA_DIR)
-        self.processed_dir = Path(settings.PROCESSED_DATA_DIR)
-        self.processed_dir.mkdir(parents=True, exist_ok=True)
-    
-    def load_raw_data(self, symbol):
-        """Load raw data"""
-        file_pattern = f"{symbol}_*.csv"
-        files = list(self.raw_dir.glob(file_pattern))
+        self.raw_data_dir = Path(path_config.RAW_DATA_DIR)
+        self.processed_data_dir = Path(path_config.PROCESSED_DATA_DIR)
         
-        if not files:
-            print(f"No file found for {symbol}")
-            return None
+    def load_raw_data(self, symbol: str) -> pd.DataFrame:
+        """بارگذاری داده‌های خام"""
+        filename = f"{symbol.replace('/', '_')}_{data_config.TIMEFRAMES['1h']}.csv"
+        filepath = self.raw_data_dir / filename
         
-        # Use the first available file
-        file_path = files[0]
-        df = pd.read_csv(file_path, index_col=0, parse_dates=True)
+        if not filepath.exists():
+            logger.warning(f"File not found: {filepath}")
+            return pd.DataFrame()
         
-        # Ensure chronological order
-        df.sort_index(inplace=True)
-        
+        df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
         return df
     
-    def clean_data(self, df):
-        """Clean data"""
-        # Remove rows with NaN values
-        initial_len = len(df)
-        df = df.dropna()
+    def clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """پاکسازی داده‌ها"""
+        if df.empty:
+            return df
         
-        # Remove outliers (unusual prices)
+        # حذف ردیف‌های با مقادیر NaN
+        df_clean = df.dropna()
+        
+        # حذف duplicate
+        df_clean = df_clean[~df_clean.index.duplicated(keep='first')]
+        
+        # حذف outliers در قیمت
         for col in ['open', 'high', 'low', 'close']:
-            q1 = df[col].quantile(0.01)
-            q3 = df[col].quantile(0.99)
-            df = df[(df[col] >= q1) & (df[col] <= q3)]
+            q1 = df_clean[col].quantile(0.01)
+            q3 = df_clean[col].quantile(0.99)
+            df_clean = df_clean[(df_clean[col] >= q1) & (df_clean[col] <= q3)]
         
-        # Handle data gaps
-        df = self._handle_data_gaps(df)
+        # اطمینان از ترتیب زمانی
+        df_clean = df_clean.sort_index()
         
-        print(f"Data cleaned from {initial_len} to {len(df)} records")
-        return df
+        return df_clean
     
-    def _handle_data_gaps(self, df):
-        """Handle time gaps in data"""
-        # Create complete time range
-        full_range = pd.date_range(
-            start=df.index.min(),
-            end=df.index.max(),
-            freq='1H'
-        )
+    def resample_data(self, df: pd.DataFrame, timeframe: str = '1h') -> pd.DataFrame:
+        """ریسیمپل کردن داده به تایم‌فریم مشخص"""
+        if df.empty:
+            return df
         
-        # Reindex to have all hours
-        df = df.reindex(full_range)
+        # ریسیمپل کردن
+        resample_rules = {
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }
         
-        # Forward fill for missing data
-        df = df.ffill()
+        df_resampled = df.resample(timeframe).agg(resample_rules)
         
-        # Backward fill for beginning of data
-        df = df.bfill()
+        # حذف NaNهای ایجاد شده
+        df_resampled = df_resampled.dropna()
         
-        return df
+        return df_resampled
     
-    def calculate_returns(self, df):
-        """Calculate returns"""
-        # Simple return
+    def calculate_returns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """محاسبه بازده‌ها"""
+        if df.empty:
+            return df
+        
+        df = df.copy()
+        
+        # بازده ساده
         df['returns'] = df['close'].pct_change()
         
-        # Logarithmic return
+        # بازده لگاریتمی
         df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
         
-        # Volatility
-        df['volatility_20'] = df['log_returns'].rolling(window=20).std()
+        # بازده‌های با تاخیر
+        for lag in [1, 2, 3, 5, 10]:
+            df[f'returns_lag_{lag}'] = df['returns'].shift(lag)
+            df[f'log_returns_lag_{lag}'] = df['log_returns'].shift(lag)
         
         return df
     
-    def add_time_features(self, df):
-        """Add time-based features"""
-        # Time features
-        df['hour'] = df.index.hour
-        df['day_of_week'] = df.index.dayofweek
-        df['day_of_month'] = df.index.day
-        df['month'] = df.index.month
-        df['week_of_year'] = df.index.isocalendar().week
+    def save_processed_data(self, df: pd.DataFrame, symbol: str):
+        """ذخیره داده‌های پردازش شده"""
+        if df.empty:
+            return
         
-        # Trading sessions
-        df['london_session'] = ((df['hour'] >= 8) & (df['hour'] <= 16)).astype(int)
-        df['ny_session'] = ((df['hour'] >= 13) & (df['hour'] <= 21)).astype(int)
-        df['asia_session'] = ((df['hour'] >= 22) | (df['hour'] <= 6)).astype(int)
+        filename = f"{symbol.replace('/', '_')}_processed.csv"
+        filepath = self.processed_data_dir / filename
         
-        return df
+        df.to_csv(filepath)
+        logger.info(f"Saved processed data to {filepath}")
     
-    def create_target_variable(self, df, horizon=5):
-        """Create target variable for classification"""
-        # Direction of movement in specified time horizon
-        future_return = df['close'].shift(-horizon) / df['close'] - 1
+    def process_symbol(self, symbol: str) -> pd.DataFrame:
+        """پردازش داده‌های یک نماد"""
+        logger.info(f"Processing {symbol}...")
         
-        # Classification: 1 for upward movement, 0 for downward movement
-        df['target'] = (future_return > 0).astype(int)
+        # 1. بارگذاری داده‌های خام
+        df_raw = self.load_raw_data(symbol)
         
-        # Regression target: percentage change
-        df['target_return'] = future_return
+        if df_raw.empty:
+            logger.warning(f"No data for {symbol}")
+            return pd.DataFrame()
         
-        return df
+        # 2. پاکسازی
+        df_clean = self.clean_data(df_raw)
+        
+        # 3. ریسیمپل
+        df_resampled = self.resample_data(df_clean, '1h')
+        
+        # 4. محاسبه بازده‌ها
+        df_with_returns = self.calculate_returns(df_resampled)
+        
+        # 5. ذخیره
+        self.save_processed_data(df_with_returns, symbol)
+        
+        logger.info(f"Processed {len(df_with_returns)} rows for {symbol}")
+        return df_with_returns
     
-    def process_pair(self, symbol):
-        """Complete preprocessing of a currency pair"""
-        print(f"Processing {symbol}...")
+    def run(self):
+        """اجرای فرآیند پیش‌پردازش"""
+        logger.info("Starting data preprocessing...")
         
-        # Load data
-        df = self.load_raw_data(symbol)
-        if df is None:
-            return None
+        for symbol in data_config.CURRENCY_PAIRS:
+            self.process_symbol(symbol)
         
-        # Clean
-        df = self.clean_data(df)
-        
-        # Calculate returns
-        df = self.calculate_returns(df)
-        
-        # Add time features
-        df = self.add_time_features(df)
-        
-        # Create target variable
-        df = self.create_target_variable(df, settings.PREDICTION_HORIZON)
-        
-        # Save processed data
-        output_path = self.processed_dir / f"{symbol}_processed.csv"
-        df.to_csv(output_path)
-        
-        print(f"Data for {symbol} saved to {output_path}")
-        return df
-    
-    def process_all_pairs(self):
-        """Preprocess all currency pairs"""
-        processed_data = {}
-        
-        for pair in settings.FOREX_PAIRS[:3]:
-            df = self.process_pair(pair)
-            if df is not None:
-                processed_data[pair] = df
-        
-        return processed_data
+        logger.info("Data preprocessing completed!")
+
+def main():
+    preprocessor = DataPreprocessor()
+    preprocessor.run()
 
 if __name__ == "__main__":
-    preprocessor = ForexDataPreprocessor()
-    data = preprocessor.process_all_pairs()
-    print(f"{len(data)} currency pairs processed")
+    main()

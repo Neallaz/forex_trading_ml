@@ -1,619 +1,325 @@
-"""
-Improved ML Model Trainer for Forex Trading
-"""
-
+# models/ml/train_ml.py
 import pandas as pd
 import numpy as np
 from pathlib import Path
-import joblib
-import warnings
-warnings.filterwarnings('ignore')
-import os
+import pickle
 import sys
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, PROJECT_ROOT)
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.model_selection import train_test_split, TimeSeriesSplit, GridSearchCV
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report
+from sklearn.preprocessing import StandardScaler
+import xgboost as xgb
+import lightgbm as lgb
+from catboost import CatBoostClassifier
 
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from sklearn.metrics import classification_report, confusion_matrix
-from imblearn.over_sampling import SMOTE
-from imblearn.pipeline import Pipeline as ImbPipeline
+from config.settings import model_config, path_config
+from utils.metrics import calculate_trading_metrics
+from loguru import logger
 
-from config.settings import settings
-
-class ImprovedMLModelTrainer:
-    """Improved ML Model Trainer with better handling"""
+class MLModelTrainer:
+    def __init__(self, symbol: str = 'EURUSD'):
+        self.symbol = symbol
+        self.models_dir = Path(path_config.ML_MODELS_DIR)
+        self.data_path = Path(path_config.PROCESSED_DATA_DIR) / f"{symbol.replace('/', '_')}_features.csv"
+        
+    def load_data(self) -> tuple:
+        """بارگذاری داده‌های ویژگی"""
+        df = pd.read_csv(self.data_path, index_col='timestamp', parse_dates=True)
+        
+        # جدا کردن features و labels
+        feature_cols = [col for col in df.columns if not col.startswith('label_')]
+        X = df[feature_cols]
+        
+        # استفاده از label جهت حرکت
+        y = df['label_direction']
+        
+        return X, y, df
     
-    def __init__(self):
-        self.processed_dir = Path(settings.PROCESSED_DATA_DIR)
-        self.models_dir = Path(settings.MODELS_DIR) / "ml"
-        self.models_dir.mkdir(parents=True, exist_ok=True)
+    def prepare_features(self, X: pd.DataFrame, y: pd.Series) -> tuple:
+        """آماده‌سازی ویژگی‌ها برای مدل"""
+        # حذف NaNها
+        mask = ~(X.isna().any(axis=1) | y.isna())
+        X_clean = X[mask]
+        y_clean = y[mask]
         
-    def load_features(self, symbol):
-        """Load engineered features"""
-        file_path = self.processed_dir / f"{symbol}_features.csv"
-        if not file_path.exists():
-            print(f"❌ File not found: {file_path}")
-            return None
+        # Standardization
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_clean)
         
-        df = pd.read_csv(file_path, index_col=0, parse_dates=True)
-        print(f"✅ Loaded {symbol} data: {df.shape}")
-        print(f"   Columns: {df.columns.tolist()}")
-        return df
-    
-    def analyze_data_quality(self, df):
-        """Analyze data quality before training"""
-        print("\n🔍 Data Quality Analysis:")
-        print(f"   Total samples: {len(df)}")
-        print(f"   Features: {len(df.columns) - 2}")  # minus target columns
+        # تقسیم داده به train/test با حفظ ترتیب زمانی
+        split_idx = int(len(X_scaled) * model_config.TRAIN_TEST_SPLIT)
         
-        if 'target' in df.columns:
-            target_dist = df['target'].value_counts()
-            print(f"   Target distribution: {target_dist.to_dict()}")
-            print(f"   Class ratio: {target_dist[1]/len(df):.3f}")
+        X_train = X_scaled[:split_idx]
+        X_test = X_scaled[split_idx:]
+        y_train = y_clean[:split_idx]
+        y_test = y_clean[split_idx:]
         
-        # Check for NaN
-        nan_counts = df.isna().sum()
-        if nan_counts.any():
-            print(f"   ⚠️ NaN values found: {nan_counts[nan_counts > 0].to_dict()}")
-        
-        return df
-    
-    def prepare_data_with_balance(self, df):
-        """Prepare data with proper balancing"""
-        print("\n📊 Preparing data...")
-        
-        if 'target' not in df.columns:
-            print("❌ 'target' column not found!")
-            return None
-        
-        X = df.drop(['target', 'target_return'], axis=1, errors='ignore')
-        y = df['target'].astype(int)
-        
-        # Time-based split (مهم برای داده‌های زمانی)
-        split_idx = int(len(X) * settings.TRAIN_TEST_SPLIT)
-        
-        X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-        y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
-        
-        print(f"   Train samples: {len(X_train)}")
-        print(f"   Test samples: {len(X_test)}")
-        print(f"   Train class distribution: {y_train.value_counts().to_dict()}")
-        print(f"   Test class distribution: {y_test.value_counts().to_dict()}")
-        
-        # Handle imbalance if severe
-        train_class_ratio = y_train.value_counts().min() / len(y_train)
-        
-        if train_class_ratio < 0.3:  # اگر کلاس اقلیت کمتر از ۳۰٪ باشه
-            print(f"   ⚠️ Severe imbalance detected ({train_class_ratio:.1%}). Applying SMOTE...")
-            
-            # فقط اگر به اندازه کافی نمونه داریم
-            if y_train.value_counts().min() > 10:  # حداقل ۱۰ نمونه از کلاس اقلیت
-                smote = SMOTE(
-                    random_state=settings.RANDOM_SEED,
-                    k_neighbors=min(5, y_train.value_counts().min() - 1)
-                )
-                X_train, y_train = smote.fit_resample(X_train, y_train)
-                print(f"   ✅ After SMOTE - Train: {pd.Series(y_train).value_counts().to_dict()}")
+        # ذخیره scaler
+        scaler_path = self.models_dir / f"{self.symbol}_scaler.pkl"
+        with open(scaler_path, 'wb') as f:
+            pickle.dump(scaler, f)
         
         return X_train, X_test, y_train, y_test
     
-    def train_random_forest_improved(self, X_train, y_train):
-        """Improved Random Forest for forex"""
-        print("\n🌲 Training Random Forest...")
+    def train_random_forest(self, X_train, y_train, X_test, y_test):
+        """آموزش مدل Random Forest"""
+        logger.info("Training Random Forest...")
         
-        # تنظیمات بهینه برای داده‌های فارکس
-        rf = RandomForestClassifier(
-            n_estimators=150,  # کم‌تر برای جلوگیری از overfitting
-            max_depth=12,      # عمق متوسط
-            min_samples_split=20,  # بیشتر برای داده‌های نویزی
-            min_samples_leaf=10,
-            max_features='sqrt',  # بهتر از 'auto' برای داده‌های با featureهای زیاد
-            bootstrap=True,
-            oob_score=True,  # برای validation داخلی
-            random_state=settings.RANDOM_SEED,
-            n_jobs=-1,
-            class_weight='balanced_subsample',  # بهترین گزینه برای imbalance
-            verbose=0
+        # Grid Search برای یافتن بهترین پارامترها
+        param_grid = {
+            'n_estimators': [100, 200, 300],
+            'max_depth': [10, 15, 20, None],
+            'min_samples_split': [2, 5, 10],
+            'min_samples_leaf': [1, 2, 4]
+        }
+        
+        # استفاده از TimeSeriesSplit برای جلوگیری از data leakage
+        tscv = TimeSeriesSplit(n_splits=5)
+        
+        rf = RandomForestClassifier(random_state=42)
+        grid_search = GridSearchCV(
+            rf, param_grid, cv=tscv, 
+            scoring='f1', n_jobs=-1, verbose=1
         )
         
-        rf.fit(X_train, y_train)
-        print(f"   OOB Score: {rf.oob_score_:.3f}")
-        return rf
+        grid_search.fit(X_train, y_train)
+        
+        # بهترین مدل
+        best_rf = grid_search.best_estimator_
+        
+        # پیش‌بینی
+        y_pred = best_rf.predict(X_test)
+        y_pred_proba = best_rf.predict_proba(X_test)[:, 1]
+        
+        # ارزیابی
+        metrics = self.evaluate_model(y_test, y_pred, y_pred_proba, "Random Forest")
+        
+        # ذخیره مدل
+        model_path = self.models_dir / f"{self.symbol}_random_forest.pkl"
+        with open(model_path, 'wb') as f:
+            pickle.dump(best_rf, f)
+        
+        # Feature Importance
+        feature_importance = pd.DataFrame({
+            'feature': [col for col in X_train.columns] if hasattr(X_train, 'columns') else list(range(X_train.shape[1])),
+            'importance': best_rf.feature_importances_
+        }).sort_values('importance', ascending=False)
+        
+        return best_rf, metrics, feature_importance
     
-    def train_xgboost_improved(self, X_train, y_train):
-        """Improved XGBoost for forex"""
-        print("\n📈 Training XGBoost...")
+    def train_xgboost(self, X_train, y_train, X_test, y_test):
+        """آموزش مدل XGBoost"""
+        logger.info("Training XGBoost...")
         
-        # محاسبه وزن برای کلاس اقلیت
-        scale_pos_weight = len(y_train[y_train==0]) / len(y_train[y_train==1])
-        scale_pos_weight = min(scale_pos_weight, 10)  # محدود کردن به حداکثر ۱۰
+        # پارامترها
+        params = {
+            'n_estimators': 300,
+            'max_depth': 6,
+            'learning_rate': 0.01,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+            'random_state': 42,
+            'n_jobs': -1,
+            'eval_metric': 'logloss'
+        }
         
-        xgb = XGBClassifier(
-            n_estimators=200,
-            max_depth=6,  # کم‌تر برای جلوگیری از overfitting
-            learning_rate=0.05,
-            subsample=0.8,  # برای جلوگیری از overfitting
-            colsample_bytree=0.8,
-            gamma=1,  # regularization
-            reg_alpha=0.1,  # L1 regularization
-            reg_lambda=1,   # L2 regularization
-            scale_pos_weight=scale_pos_weight,
-            random_state=settings.RANDOM_SEED,
-            n_jobs=-1,
-            use_label_encoder=False,
-            eval_metric='logloss',
-            verbosity=0
+        xgb_model = xgb.XGBClassifier(**params)
+        
+        # آموزش با validation set
+        X_train_fit, X_val, y_train_fit, y_val = train_test_split(
+            X_train, y_train, test_size=0.2, shuffle=False
         )
         
-        xgb.fit(X_train, y_train)
-        return xgb
-    
-    def train_lightgbm_improved(self, X_train, y_train):
-        """Improved LightGBM for forex"""
-        print("\n💡 Training LightGBM...")
-        
-        # محاسبه وزن کلاس
-        class_weights = len(y_train) / (2 * np.bincount(y_train))
-        
-        lgbm = LGBMClassifier(
-            n_estimators=200,
-            max_depth=7,
-            learning_rate=0.05,
-            num_leaves=31,  # محدود کردن برای جلوگیری از overfitting
-            min_child_samples=20,  # بیشتر برای داده‌های نویزی
-            subsample=0.8,
-            colsample_bytree=0.8,
-            reg_alpha=0.1,
-            reg_lambda=0.1,
-            class_weight='balanced',
-            random_state=settings.RANDOM_SEED,
-            n_jobs=-1,
-            verbose=-1  # غیرفعال کردن warnings
+        xgb_model.fit(
+            X_train_fit, y_train_fit,
+            eval_set=[(X_val, y_val)],
+            early_stopping_rounds=20,
+            verbose=False
         )
         
-        lgbm.fit(X_train, y_train)
-        return lgbm
-    
-    def train_logistic_regression_improved(self, X_train, y_train):
-        """Improved Logistic Regression for forex"""
-        print("\n📉 Training Logistic Regression...")
+        # پیش‌بینی
+        y_pred = xgb_model.predict(X_test)
+        y_pred_proba = xgb_model.predict_proba(X_test)[:, 1]
         
-        lr = LogisticRegression(
-            C=0.1,  # قوی‌تر regularization
-            max_iter=2000,
-            class_weight='balanced',
-            random_state=settings.RANDOM_SEED,
-            n_jobs=-1,
-            solver='saga',  # بهتر برای داده‌های بزرگ
-            penalty='elasticnet',  # ترکیب L1 و L2
-            l1_ratio=0.5
+        # ارزیابی
+        metrics = self.evaluate_model(y_test, y_pred, y_pred_proba, "XGBoost")
+        
+        # ذخیره مدل
+        model_path = self.models_dir / f"{self.symbol}_xgboost.pkl"
+        with open(model_path, 'wb') as f:
+            pickle.dump(xgb_model, f)
+        
+        return xgb_model, metrics
+    
+    def train_lightgbm(self, X_train, y_train, X_test, y_test):
+        """آموزش مدل LightGBM"""
+        logger.info("Training LightGBM...")
+        
+        # پارامترها
+        params = {
+            'n_estimators': 300,
+            'max_depth': 7,
+            'learning_rate': 0.01,
+            'num_leaves': 31,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+            'random_state': 42,
+            'n_jobs': -1,
+            'metric': 'binary_logloss'
+        }
+        
+        lgb_model = lgb.LGBMClassifier(**params)
+        
+        # آموزش
+        lgb_model.fit(
+            X_train, y_train,
+            eval_set=[(X_test, y_test)],
+            early_stopping_rounds=20,
+            verbose=False
         )
         
-        lr.fit(X_train, y_train)
-        return lr
+        # پیش‌بینی
+        y_pred = lgb_model.predict(X_test)
+        y_pred_proba = lgb_model.predict_proba(X_test)[:, 1]
+        
+        # ارزیابی
+        metrics = self.evaluate_model(y_test, y_pred, y_pred_proba, "LightGBM")
+        
+        # ذخیره مدل
+        model_path = self.models_dir / f"{self.symbol}_lightgbm.pkl"
+        with open(model_path, 'wb') as f:
+            pickle.dump(lgb_model, f)
+        
+        return lgb_model, metrics
     
-    def evaluate_model_improved(self, model, X_test, y_test, model_name):
-        """Comprehensive evaluation"""
-        print(f"\n{'='*40}")
-        print(f"Evaluating {model_name}")
-        print(f"{'='*40}")
+    def train_catboost(self, X_train, y_train, X_test, y_test):
+        """آموزش مدل CatBoost"""
+        logger.info("Training CatBoost...")
         
-        y_pred = model.predict(X_test)
-        y_pred_proba = model.predict_proba(X_test)[:, 1]
+        # CatBoost می‌تواند با مقادیر NaN کار کند
+        cb_model = CatBoostClassifier(
+            iterations=500,
+            depth=6,
+            learning_rate=0.01,
+            loss_function='Logloss',
+            random_seed=42,
+            verbose=False
+        )
         
-        # Metrics
+        # آموزش
+        cb_model.fit(X_train, y_train, eval_set=(X_test, y_test), verbose=False)
+        
+        # پیش‌بینی
+        y_pred = cb_model.predict(X_test)
+        y_pred_proba = cb_model.predict_proba(X_test)[:, 1]
+        
+        # ارزیابی
+        metrics = self.evaluate_model(y_test, y_pred, y_pred_proba, "CatBoost")
+        
+        # ذخیره مدل
+        model_path = self.models_dir / f"{self.symbol}_catboost.pkl"
+        cb_model.save_model(str(model_path))
+        
+        return cb_model, metrics
+    
+    def evaluate_model(self, y_true, y_pred, y_pred_proba, model_name):
+        """ارزیابی مدل"""
         metrics = {
-            'accuracy': accuracy_score(y_test, y_pred),
-            'precision': precision_score(y_test, y_pred, zero_division=0),
-            'recall': recall_score(y_test, y_pred, zero_division=0),
-            'f1': f1_score(y_test, y_pred, zero_division=0)
+            'model': model_name,
+            'accuracy': accuracy_score(y_true, y_pred),
+            'f1_score': f1_score(y_true, y_pred),
+            'roc_auc': roc_auc_score(y_true, y_pred_proba),
+            'precision': classification_report(y_true, y_pred, output_dict=True)['weighted avg']['precision'],
+            'recall': classification_report(y_true, y_pred, output_dict=True)['weighted avg']['recall']
         }
         
-        # Add ROC-AUC if possible
-        if len(np.unique(y_test)) > 1:
-            metrics['roc_auc'] = roc_auc_score(y_test, y_pred_proba)
+        logger.info(f"{model_name} Results:")
+        logger.info(f"  Accuracy: {metrics['accuracy']:.4f}")
+        logger.info(f"  F1-Score: {metrics['f1_score']:.4f}")
+        logger.info(f"  ROC-AUC: {metrics['roc_auc']:.4f}")
         
-        print(f"📊 Accuracy:  {metrics['accuracy']:.4f}")
-        print(f"🎯 Precision: {metrics['precision']:.4f}")
-        print(f"↩️ Recall:    {metrics['recall']:.4f}")
-        print(f"⭐ F1-Score:  {metrics['f1']:.4f}")
-        
-        if 'roc_auc' in metrics:
-            print(f"📈 ROC-AUC:   {metrics['roc_auc']:.4f}")
-        
-        # Confusion Matrix
-        cm = confusion_matrix(y_test, y_pred)
-        print(f"\n🧮 Confusion Matrix:")
-        print(f"   TN: {cm[0,0]}, FP: {cm[0,1]}")
-        print(f"   FN: {cm[1,0]}, TP: {cm[1,1]}")
-        
-        # Classification Report
-        print(f"\n📋 Classification Report:")
-        print(classification_report(y_test, y_pred, zero_division=0))
-        
-        return metrics, y_pred_proba
+        return metrics
     
-    def train_all_models_improved(self, symbol):
-        """Train all improved ML models"""
-        print(f"\n{'='*60}")
-        print(f"🚀 TRAINING IMPROVED ML MODELS FOR {symbol}")
-        print(f"{'='*60}")
+    def train_all_models(self):
+        """آموزش تمام مدل‌های ML"""
+        logger.info(f"Starting ML model training for {self.symbol}...")
         
-        # Load data
-        df = self.load_features(symbol)
-        if df is None:
-            return None
+        # 1. بارگذاری داده‌ها
+        X, y, df = self.load_data()
         
-        # Analyze data
-        df = self.analyze_data_quality(df)
+        # 2. آماده‌سازی ویژگی‌ها
+        X_train, X_test, y_train, y_test = self.prepare_features(X, y)
         
-        # Prepare data with balancing
-        data = self.prepare_data_with_balance(df)
-        if data is None:
-            return None
+        # 3. آموزش مدل‌ها
+        results = {}
         
-        X_train, X_test, y_train, y_test = data
-        
-        # Train models
-        models = {}
-        predictions = {}
-        metrics_list = []
-        
-        # 1. Random Forest
-        rf_model = self.train_random_forest_improved(X_train, y_train)
-        models['random_forest'] = rf_model
-        rf_metrics, rf_preds = self.evaluate_model_improved(
-            rf_model, X_test, y_test, "Random Forest"
+        # Random Forest
+        rf_model, rf_metrics, feature_importance = self.train_random_forest(
+            X_train, y_train, X_test, y_test
         )
-        metrics_list.append({**rf_metrics, 'model': 'random_forest'})
-        predictions['random_forest'] = rf_preds
-        
-        # 2. XGBoost
-        xgb_model = self.train_xgboost_improved(X_train, y_train)
-        models['xgboost'] = xgb_model
-        xgb_metrics, xgb_preds = self.evaluate_model_improved(
-            xgb_model, X_test, y_test, "XGBoost"
-        )
-        metrics_list.append({**xgb_metrics, 'model': 'xgboost'})
-        predictions['xgboost'] = xgb_preds
-        
-        # 3. LightGBM
-        lgbm_model = self.train_lightgbm_improved(X_train, y_train)
-        models['lightgbm'] = lgbm_model
-        lgbm_metrics, lgbm_preds = self.evaluate_model_improved(
-            lgbm_model, X_test, y_test, "LightGBM"
-        )
-        metrics_list.append({**lgbm_metrics, 'model': 'lightgbm'})
-        predictions['lightgbm'] = lgbm_preds
-        
-        # 4. Logistic Regression
-        lr_model = self.train_logistic_regression_improved(X_train, y_train)
-        models['logistic_regression'] = lr_model
-        lr_metrics, lr_preds = self.evaluate_model_improved(
-            lr_model, X_test, y_test, "Logistic Regression"
-        )
-        metrics_list.append({**lr_metrics, 'model': 'logistic_regression'})
-        predictions['logistic_regression'] = lr_preds
-        
-        # Save everything
-        self.save_results(symbol, models, metrics_list, predictions, X_test, y_test)
-        
-        return {
-            'models': models,
-            'metrics': pd.DataFrame(metrics_list),
-            'predictions': pd.DataFrame(predictions, index=X_test.index),
-            'X_test': X_test,
-            'y_test': y_test
+        results['random_forest'] = {
+            'model': rf_model,
+            'metrics': rf_metrics,
+            'feature_importance': feature_importance
         }
+        
+        # XGBoost
+        xgb_model, xgb_metrics = self.train_xgboost(
+            X_train, y_train, X_test, y_test
+        )
+        results['xgboost'] = {
+            'model': xgb_model,
+            'metrics': xgb_metrics
+        }
+        
+        # LightGBM
+        lgb_model, lgb_metrics = self.train_lightgbm(
+            X_train, y_train, X_test, y_test
+        )
+        results['lightgbm'] = {
+            'model': lgb_model,
+            'metrics': lgb_metrics
+        }
+        
+        # CatBoost
+        cb_model, cb_metrics = self.train_catboost(
+            X_train, y_train, X_test, y_test
+        )
+        results['catboost'] = {
+            'model': cb_model,
+            'metrics': cb_metrics
+        }
+        
+        # 4. ذخیره نتایج
+        self.save_results(results)
+        
+        logger.info("ML model training completed!")
+        return results
     
-    def save_results(self, symbol, models, metrics_list, predictions, X_test, y_test):
-        """Save all results"""
-        print(f"\n💾 Saving results for {symbol}...")
+    def save_results(self, results):
+        """ذخیره نتایج آموزش"""
+        # ذخیره metrics
+        metrics_df = pd.DataFrame([r['metrics'] for r in results.values()])
+        metrics_path = self.models_dir / f"{self.symbol}_ml_metrics.csv"
+        metrics_df.to_csv(metrics_path, index=False)
         
-        # Save models
-        for model_name, model in models.items():
-            model_path = self.models_dir / f"{symbol}_{model_name}.pkl"
-            joblib.dump(model, model_path)
-            print(f"   ✅ Model saved: {model_path}")
+        logger.info(f"Metrics saved to {metrics_path}")
         
-        # Save metrics
-        metrics_df = pd.DataFrame(metrics_list)
-        results_path = self.models_dir / f"{symbol}_ml_results.csv"
-        metrics_df.to_csv(results_path, index=False)
-        print(f"   ✅ Metrics saved: {results_path}")
-        
-        # Save predictions
-        preds_df = pd.DataFrame(predictions, index=X_test.index)
-        preds_df['actual'] = y_test.values
-        preds_path = self.models_dir / f"{symbol}_predictions.csv"
-        preds_df.to_csv(preds_path)
-        print(f"   ✅ Predictions saved: {preds_path}")
-        
-        # Print summary
-        print(f"\n📋 Summary for {symbol}:")
-        print(metrics_df.to_string(index=False))
-    
-    def train_for_all_pairs(self):
-        """Train for all currency pairs"""
-        all_results = {}
-        
-        print(f"\n{'='*60}")
-        print(f"🎯 STARTING ML TRAINING FOR ALL PAIRS")
-        print(f"{'='*60}")
-        
-        for pair in settings.FOREX_PAIRS[:2]:  # با ۲ جفت ارز شروع کن
-            print(f"\n{'='*60}")
-            print(f"PROCESSING: {pair}")
-            print(f"{'='*60}")
+        # ذخیره feature importance
+        if 'feature_importance' in results['random_forest']:
+            fi = results['random_forest']['feature_importance']
+            fi_path = self.models_dir / f"{self.symbol}_feature_importance.csv"
+            fi.to_csv(fi_path, index=False)
             
-            results = self.train_all_models_improved(pair)
-            if results:
-                all_results[pair] = results
-                print(f"\n✅ Successfully trained {pair}")
-            else:
-                print(f"\n❌ Failed to train {pair}")
-        
-        return all_results
+            logger.info(f"Feature importance saved to {fi_path}")
+
+def train_all_ml_models():
+    """آموزش مدل‌های ML برای تمام جفت‌ارزها"""
+    trainer = MLModelTrainer('EURUSD')
+    results = trainer.train_all_models()
+    return results
 
 if __name__ == "__main__":
-    trainer = ImprovedMLModelTrainer()
-    results = trainer.train_for_all_pairs()
-    
-    print(f"\n{'='*60}")
-    print("🎉 ML MODEL TRAINING COMPLETED!")
-    print(f"{'='*60}")
-    print(f"Total pairs trained: {len(results)}")
-    
-# """
-# Train Classic Machine Learning Models
-# """
-
-# import pandas as pd
-# import numpy as np
-# from pathlib import Path
-# import joblib
-# import warnings
-# warnings.filterwarnings('ignore')
-# import os
-# import sys
-# # Add project root to Python path
-# PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# sys.path.insert(0, PROJECT_ROOT)
-
-# from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
-# from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-# from sklearn.linear_model import LogisticRegression
-# from sklearn.svm import SVC
-# from xgboost import XGBClassifier
-# from lightgbm import LGBMClassifier
-# from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-# from sklearn.metrics import classification_report, confusion_matrix
-
-# from config.settings import settings
-
-# class MLModelTrainer:
-#     """Machine Learning Model Trainer Class"""
-    
-#     def __init__(self):
-#         self.processed_dir = Path(settings.PROCESSED_DATA_DIR)
-#         self.models_dir = Path(settings.MODELS_DIR) / "ml"
-#         self.models_dir.mkdir(parents=True, exist_ok=True)
-        
-#     def load_features(self, symbol):
-#         """Load engineered features"""
-#         file_path = self.processed_dir / f"{symbol}_features.csv"
-#         if not file_path.exists():
-#             return None
-        
-#         df = pd.read_csv(file_path, index_col=0, parse_dates=True)
-#         return df
-    
-#     def prepare_data(self, df):
-#         """Prepare data for training"""
-#         # Separate features and target
-#         X = df.drop(['target', 'target_return'], axis=1)
-#         y = df['target'].astype(int)  # classification target
-        
-#         # Time-based split
-#         split_idx = int(len(X) * settings.TRAIN_TEST_SPLIT)
-        
-#         X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-#         y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
-        
-#         return X_train, X_test, y_train, y_test
-    
-#     def train_random_forest(self, X_train, y_train):
-#         """Train Random Forest model"""
-#         print("Training Random Forest...")
-        
-#         # Parameters for tuning
-#         param_grid = {
-#             'n_estimators': [100, 200],
-#             'max_depth': [10, 20, None],
-#             'min_samples_split': [2, 5],
-#             'min_samples_leaf': [1, 2]
-#         }
-        
-#         # Use TimeSeriesSplit for cross-validation
-#         tscv = TimeSeriesSplit(n_splits=5)
-        
-#         # Base model
-#         rf = RandomForestClassifier(
-#             random_state=settings.RANDOM_SEED,
-#             n_jobs=-1,
-#             class_weight='balanced'
-#         )
-        
-#         # Grid Search
-#         grid_search = GridSearchCV(
-#             rf, param_grid, 
-#             cv=tscv, 
-#             scoring='f1',
-#             n_jobs=-1,
-#             verbose=1
-#         )
-        
-#         grid_search.fit(X_train, y_train)
-        
-#         print(f"Best parameters: {grid_search.best_params_}")
-#         print(f"Best score: {grid_search.best_score_:.4f}")
-        
-#         return grid_search.best_estimator_
-    
-    
-    
-#     def train_lightgbm(self, X_train, y_train):
-#         """Train LightGBM model"""
-#         print("Training LightGBM...")
-        
-#         lgbm = LGBMClassifier(
-#             n_estimators=200,
-#             max_depth=7,
-#             learning_rate=0.05,
-#             random_state=settings.RANDOM_SEED,
-#             n_jobs=-1
-#         )
-        
-#         lgbm.fit(X_train, y_train)
-#         return lgbm
-    
-#     def train_logistic_regression(self, X_train, y_train):
-#         """Train Logistic Regression model"""
-#         print("Training Logistic Regression...")
-        
-#         lr = LogisticRegression(
-#             random_state=settings.RANDOM_SEED,
-#             max_iter=1000,
-#             class_weight='balanced',
-#             n_jobs=-1
-#         )
-        
-#         lr.fit(X_train, y_train)
-#         return lr
-    
-#     def evaluate_model(self, model, X_test, y_test, model_name):
-#         """Evaluate model performance"""
-#         y_pred = model.predict(X_test)
-#         y_pred_proba = model.predict_proba(X_test)[:, 1]
-        
-#         metrics = {
-#             'accuracy': accuracy_score(y_test, y_pred),
-#             'precision': precision_score(y_test, y_pred),
-#             'recall': recall_score(y_test, y_pred),
-#             'f1': f1_score(y_test, y_pred),
-#             'model': model_name
-#         }
-        
-#         print(f"\nEvaluation of {model_name}:")
-#         print(f"Accuracy: {metrics['accuracy']:.4f}")
-#         print(f"Precision: {metrics['precision']:.4f}")
-#         print(f"Recall: {metrics['recall']:.4f}")
-#         print(f"F1-Score: {metrics['f1']:.4f}")
-        
-#         # Show confusion matrix
-#         cm = confusion_matrix(y_test, y_pred)
-#         print(f"Confusion Matrix:\n{cm}")
-        
-#         # Classification report
-#         print(f"\nClassification Report:")
-#         print(classification_report(y_test, y_pred))
-        
-#         return metrics, y_pred_proba
-    
-#     def train_all_models(self, symbol):
-#         """Train all ML models for a currency pair"""
-#         print(f"\n{'='*50}")
-#         print(f"Training ML models for {symbol}")
-#         print(f"{'='*50}")
-        
-#         # Load data
-#         df = self.load_features(symbol)
-#         if df is None:
-#             print(f"No data found for {symbol}")
-#             return None
-        
-#         # Prepare data
-#         X_train, X_test, y_train, y_test = self.prepare_data(df)
-#         print(f"Sample counts - Train: {len(X_train)}, Test: {len(X_test)}")
-        
-#         # Train models
-#         models = {}
-#         predictions = {}
-#         metrics_list = []
-        
-#         # Random Forest
-#         rf_model = self.train_random_forest(X_train, y_train)
-#         models['random_forest'] = rf_model
-#         rf_metrics, rf_preds = self.evaluate_model(rf_model, X_test, y_test, "Random Forest")
-#         metrics_list.append(rf_metrics)
-#         predictions['random_forest'] = rf_preds
-        
-#         # XGBoost
-#         xgb_model = self.train_xgboost(X_train, y_train)
-#         models['xgboost'] = xgb_model
-#         xgb_metrics, xgb_preds = self.evaluate_model(xgb_model, X_test, y_test, "XGBoost")
-#         metrics_list.append(xgb_metrics)
-#         predictions['xgboost'] = xgb_preds
-        
-#         # LightGBM
-#         lgbm_model = self.train_lightgbm(X_train, y_train)
-#         models['lightgbm'] = lgbm_model
-#         lgbm_metrics, lgbm_preds = self.evaluate_model(lgbm_model, X_test, y_test, "LightGBM")
-#         metrics_list.append(lgbm_metrics)
-#         predictions['lightgbm'] = lgbm_preds
-        
-#         # Logistic Regression (baseline)
-#         lr_model = self.train_logistic_regression(X_train, y_train)
-#         models['logistic_regression'] = lr_model
-#         lr_metrics, lr_preds = self.evaluate_model(lr_model, X_test, y_test, "Logistic Regression")
-#         metrics_list.append(lr_metrics)
-#         predictions['logistic_regression'] = lr_preds
-        
-#         # Save models
-#         for model_name, model in models.items():
-#             model_path = self.models_dir / f"{symbol}_{model_name}.pkl"
-#             joblib.dump(model, model_path)
-#             print(f"Model {model_name} saved to {model_path}")
-        
-#         # Save results
-#         results_df = pd.DataFrame(metrics_list)
-#         results_path = self.models_dir / f"{symbol}_ml_results.csv"
-#         results_df.to_csv(results_path)
-        
-#         # Save predictions
-#         preds_df = pd.DataFrame(predictions, index=X_test.index)
-#         preds_df['actual'] = y_test.values
-#         preds_path = self.models_dir / f"{symbol}_predictions.csv"
-#         preds_df.to_csv(preds_path)
-        
-#         print(f"\nTraining results for {symbol} saved")
-        
-#         return {
-#             'models': models,
-#             'metrics': results_df,
-#             'predictions': preds_df,
-#             'X_test': X_test,
-#             'y_test': y_test
-#         }
-    
-#     def train_for_all_pairs(self):
-#         """Train models for all currency pairs"""
-#         all_results = {}
-        
-#         for pair in settings.FOREX_PAIRS[:2]:  # Start with two pairs
-#             results = self.train_all_models(pair)
-#             if results:
-#                 all_results[pair] = results
-        
-#         return all_results
-
-# if __name__ == "__main__":
-#     trainer = MLModelTrainer()
-#     results = trainer.train_for_all_pairs()
-#     print(f"ML model training completed for {len(results)} pairs")
+    train_all_ml_models()

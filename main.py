@@ -1,95 +1,126 @@
-"""
-نقطه ورود اصلی پروژه - Forex ML Trading System
-"""
-
-import sys
-from pathlib import Path
+# main.py
 import argparse
+import sys
 import warnings
-warnings.filterwarnings('ignore')
+from pathlib import Path
 
-# اضافه کردن مسیر پروژه
-project_root = Path(__file__).parent
-sys.path.append(str(project_root))
+# اضافه کردن مسیر پروژه به sys.path
+sys.path.append(str(Path(__file__).parent))
 
-from config.settings import settings
+from config.settings import path_config
+from loguru import logger
 
-def run_pipeline(symbol=None, steps=None):
-    """اجرای کامل pipeline پروژه"""
+# تنظیمات لاگ‌گیری
+logger.add(
+    path_config.LOGS_DIR + "/forex_trading_{time}.log",
+    rotation="1 day",
+    retention="30 days",
+    level="INFO"
+)
+
+def run_data_pipeline():
+    """اجرای پایپلاین داده"""
+    logger.info("Starting data pipeline...")
     
-    print("\n" + "="*60)
-    print("🏦 Forex ML Trading System - Complete Pipeline")
-    print("="*60)
+    from data.scripts import download_data, preprocess, feature_engineering
     
-    steps = steps or ["all"]
+    # 1. دانلود داده‌ها
+    download_data.main()
     
-    if "all" in steps or "download" in steps:
-        print("\n📥 Step 1: Downloading Data...")
-        from data.scripts.01_download_data import ForexDataDownloader
-        downloader = ForexDataDownloader()
-        downloader.download_all_pairs()
+    # 2. پیش‌پردازش
+    preprocess.main()
     
-    if "all" in steps or "preprocess" in steps:
-        print("\n🔧 Step 2: Preprocessing Data...")
-        from data.scripts.02_preprocess import ForexDataPreprocessor
-        preprocessor = ForexDataPreprocessor()
-        preprocessor.process_all_pairs()
+    # 3. مهندسی ویژگی
+    feature_engineering.main()
     
-    if "all" in steps or "features" in steps:
-        print("\n⚙️ Step 3: Feature Engineering...")
-        from data.scripts.03_feature_engineering import FeatureEngineer
-        engineer = FeatureEngineer()
-        engineer.engineer_all_pairs()
+    logger.info("Data pipeline completed!")
+
+def train_models():
+    """آموزش مدل‌ها"""
+    logger.info("Starting model training...")
     
-    if "all" in steps or "ml" in steps:
-        print("\n🤖 Step 4: Training ML Models...")
-        from models.ml.train_ml import MLModelTrainer
-        ml_trainer = MLModelTrainer()
-        ml_trainer.train_for_all_pairs()
+    from models.ml.train_ml import train_all_ml_models
+    from models.dl.train_dl import train_all_dl_models
+    from models.ensemble.ensemble_trainer import create_ensemble_model
     
-    if "all" in steps or "dl" in steps:
-        print("\n🧠 Step 5: Training DL Models...")
-        from models.dl.train_dl import DLModelTrainer
-        dl_trainer = DLModelTrainer()
-        dl_trainer.train_for_all_pairs()
+    # 1. آموزش مدل‌های ML
+    ml_results = train_all_ml_models()
     
-    if "all" in steps or "ensemble" in steps:
-        print("\n🎯 Step 6: Training Ensemble Model...")
-        from models.ensemble.ensemble_trainer import EnsembleTrainer
-        ensemble_trainer = EnsembleTrainer()
-        ensemble_trainer.train_all_ensembles()
+    # 2. آموزش مدل‌های DL
+    dl_results = train_all_dl_models()
     
-    if "all" in steps or "backtest" in steps:
-        print("\n📊 Step 7: Running Backtests...")
-        from trading.backtesting.backtester import Backtester
-        backtester = Backtester()
-        backtester.run_comparative_backtest()
+    # 3. ساخت مدل Ensemble
+    ensemble_results = create_ensemble_model()
     
-    if "all" in steps or "dashboard" in steps:
-        print("\n📈 Step 8: Launching Dashboard...")
-        print("Dashboard will be available at: http://localhost:8501")
-        import subprocess
-        subprocess.run(["streamlit", "run", "dashboard/app.py"])
+    logger.info(f"Model training completed!")
+    return {
+        'ml': ml_results,
+        'dl': dl_results,
+        'ensemble': ensemble_results
+    }
+
+def run_backtesting():
+    """اجرای بکتست"""
+    logger.info("Starting backtesting...")
     
-    print("\n" + "="*60)
-    print("✅ Pipeline completed successfully!")
-    print("="*60)
+    from trading.backtesting.backtester import Backtester
+    
+    backtester = Backtester()
+    results = backtester.run()
+    
+    logger.info(f"Backtesting completed!")
+    return results
+
+def run_live_monitoring():
+    """مانیتورینگ زنده"""
+    logger.info("Starting live monitoring...")
+    
+    from trading.live.monitor import LiveMonitor
+    
+    monitor = LiveMonitor()
+    monitor.start()
+    
+    return monitor
 
 def main():
     """تابع اصلی"""
     parser = argparse.ArgumentParser(description='Forex ML Trading System')
-    parser.add_argument('--steps', nargs='+', 
-                       choices=['download', 'preprocess', 'features', 
-                               'ml', 'dl', 'ensemble', 'backtest', 
-                               'dashboard', 'all'],
-                       default=['all'],
-                       help='Steps to run in the pipeline')
-    parser.add_argument('--symbol', type=str,
-                       help='Specific currency pair to process')
+    parser.add_argument('--mode', type=str, required=True,
+                       choices=['data', 'train', 'backtest', 'live', 'all'],
+                       help='Mode of operation')
+    parser.add_argument('--pair', type=str, default='EURUSD',
+                       help='Currency pair to process')
+    parser.add_argument('--timeframe', type=str, default='1h',
+                       help='Timeframe for data')
     
     args = parser.parse_args()
     
-    run_pipeline(symbol=args.symbol, steps=args.steps)
+    logger.info(f"Starting Forex ML Trading System in {args.mode} mode")
+    
+    try:
+        if args.mode == 'data':
+            run_data_pipeline()
+        
+        elif args.mode == 'train':
+            train_models()
+        
+        elif args.mode == 'backtest':
+            run_backtesting()
+        
+        elif args.mode == 'live':
+            run_live_monitoring()
+        
+        elif args.mode == 'all':
+            run_data_pipeline()
+            train_models()
+            run_backtesting()
+        
+        logger.info("Process completed successfully!")
+        
+    except Exception as e:
+        logger.error(f"Error occurred: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
+    warnings.filterwarnings('ignore')
     main()

@@ -1,181 +1,212 @@
-"""
-Financial Feature Engineering
-"""
-
-import os 
-import sys
+# data/scripts/03_feature_engineering.py
 import pandas as pd
 import numpy as np
-import talib
 from pathlib import Path
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-import joblib
+import sys
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-# Add project root to Python path
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, PROJECT_ROOT)
-
-from config.settings import settings
+from config.settings import feature_config, path_config
+from utils.indicators import TechnicalIndicators
+from loguru import logger
 
 class FeatureEngineer:
-    """Financial Feature Engineering Class"""
-    
     def __init__(self):
-        self.processed_dir = Path(settings.PROCESSED_DATA_DIR)
-        self.scaler = StandardScaler()
+        self.processed_data_dir = Path(path_config.PROCESSED_DATA_DIR)
+        self.indicators_calculator = TechnicalIndicators()
+        
+    def load_processed_data(self, symbol: str) -> pd.DataFrame:
+        """بارگذاری داده‌های پردازش شده"""
+        filename = f"{symbol.replace('/', '_')}_processed.csv"
+        filepath = self.processed_data_dir / filename
+        
+        if not filepath.exists():
+            logger.warning(f"File not found: {filepath}")
+            return pd.DataFrame()
+        
+        df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+        return df
     
-    def calculate_technical_indicators(self, df):
-        """Calculate technical indicators using TA-Lib"""
+    def add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """اضافه کردن اندیکاتورهای تکنیکال"""
+        if df.empty:
+            return df
         
-        # Convert to numpy arrays for TA-Lib
-        open_prices = df['open'].values.astype(float)
-        high_prices = df['high'].values.astype(float)
-        low_prices = df['low'].values.astype(float)
-        close_prices = df['close'].values.astype(float)
-        volume = df['volume'].values.astype(float) if 'volume' in df.columns else None
+        df = df.copy()
         
-        # Trend indicators
-        df['SMA_20'] = talib.SMA(close_prices, timeperiod=20)
-        df['SMA_50'] = talib.SMA(close_prices, timeperiod=50)
-        df['EMA_10'] = talib.EMA(close_prices, timeperiod=10)
-        df['EMA_20'] = talib.EMA(close_prices, timeperiod=20)
-        df['EMA_50'] = talib.EMA(close_prices, timeperiod=50)
+        # Moving Averages
+        for period in feature_config.INDICATORS['sma']:
+            df[f'sma_{period}'] = self.indicators_calculator.sma(df['close'], period)
         
-        # Momentum indicators
-        df['RSI'] = talib.RSI(close_prices, timeperiod=14)
-        df['MACD'], df['MACD_signal'], df['MACD_hist'] = talib.MACD(
-            close_prices, fastperiod=12, slowperiod=26, signalperiod=9
-        )
-        df['STOCH_K'], df['STOCH_D'] = talib.STOCH(
-            high_prices, low_prices, close_prices,
-            fastk_period=14, slowk_period=3, slowd_period=3
-        )
-        df['WILLIAMS_R'] = talib.WILLR(
-            high_prices, low_prices, close_prices, timeperiod=14
-        )
+        for period in feature_config.INDICATORS['ema']:
+            df[f'ema_{period}'] = self.indicators_calculator.ema(df['close'], period)
         
-        # Volatility indicators
-        df['BB_upper'], df['BB_middle'], df['BB_lower'] = talib.BBANDS(
-            close_prices, timeperiod=20, nbdevup=2, nbdevdn=2
-        )
-        df['ATR'] = talib.ATR(high_prices, low_prices, close_prices, timeperiod=14)
+        # RSI
+        for period in feature_config.INDICATORS['rsi']:
+            df[f'rsi_{period}'] = self.indicators_calculator.rsi(df['close'], period)
         
-        # Volume indicators
-        if volume is not None:
-            df['OBV'] = talib.OBV(close_prices, volume)
-            df['ADOSC'] = talib.ADOSC(high_prices, low_prices, close_prices, volume)
+        # MACD
+        for fast, slow, signal in feature_config.INDICATORS['macd']:
+            macd_line, signal_line, histogram = self.indicators_calculator.macd(
+                df['close'], fast, slow, signal
+            )
+            df[f'macd_{fast}_{slow}'] = macd_line
+            df[f'macd_signal_{signal}'] = signal_line
+            df[f'macd_hist_{signal}'] = histogram
         
-        # Derived price features
-        df['high_low_pct'] = (df['high'] - df['low']) / df['close'] * 100
-        df['close_open_pct'] = (df['close'] - df['open']) / df['open'] * 100
+        # Bollinger Bands
+        for period, std in feature_config.INDICATORS['bollinger']:
+            upper, middle, lower = self.indicators_calculator.bollinger_bands(
+                df['close'], period, std
+            )
+            df[f'bb_upper_{period}'] = upper
+            df[f'bb_middle_{period}'] = middle
+            df[f'bb_lower_{period}'] = lower
+            df[f'bb_width_{period}'] = (upper - lower) / middle
         
-        # Derived return features
-        df['returns_5'] = df['close'].pct_change(5)
-        df['returns_10'] = df['close'].pct_change(10)
-        df['returns_20'] = df['close'].pct_change(20)
+        # ATR
+        for period in feature_config.INDICATORS['atr']:
+            df[f'atr_{period}'] = self.indicators_calculator.atr(
+                df['high'], df['low'], df['close'], period
+            )
         
-        # Various volatility measures
+        return df
+    
+    def add_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """اضافه کردن ویژگی‌های زمانی"""
+        if df.empty:
+            return df
+        
+        df = df.copy()
+        
+        # استخراج ویژگی‌های زمانی
+        df['hour'] = df.index.hour
+        df['day_of_week'] = df.index.dayofweek
+        df['day_of_month'] = df.index.day
+        df['month'] = df.index.month
+        df['quarter'] = df.index.quarter
+        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+        
+        # سشن‌های معاملاتی
+        df['trading_session'] = df['hour'].apply(self._get_trading_session)
+        
+        # تبدیل به dummy variables
+        session_dummies = pd.get_dummies(df['trading_session'], prefix='session')
+        df = pd.concat([df, session_dummies], axis=1)
+        
+        return df
+    
+    def _get_trading_session(self, hour: int) -> str:
+        """تعیین سشن معاملاتی بر اساس ساعت"""
+        if 0 <= hour < 8:
+            return 'asian'
+        elif 8 <= hour < 16:
+            return 'european'
+        elif 16 <= hour < 24:
+            return 'american'
+        else:
+            return 'other'
+    
+    def add_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """اضافه کردن ویژگی‌های قیمتی"""
+        if df.empty:
+            return df
+        
+        df = df.copy()
+        
+        # نسبت‌های قیمت
+        df['high_low_ratio'] = df['high'] / df['low'] - 1
+        df['close_open_ratio'] = df['close'] / df['open'] - 1
+        
+        # نوسانات
+        for window in [10, 20, 30]:
+            df[f'volatility_{window}'] = df['returns'].rolling(window).std()
+        
+        # مومنتوم
         for window in [5, 10, 20]:
-            df[f'volatility_{window}'] = df['log_returns'].rolling(window).std()
+            df[f'momentum_{window}'] = df['close'] / df['close'].shift(window) - 1
+        
+        # شکاف قیمت
+        df['gap'] = (df['open'] - df['close'].shift(1)) / df['close'].shift(1)
         
         return df
     
-    def create_lag_features(self, df, columns, lags=[1, 2, 3, 5, 10]):
-        """Create lag features"""
-        for col in columns:
-            for lag in lags:
-                df[f'{col}_lag_{lag}'] = df[col].shift(lag)
+    def create_labels(self, df: pd.DataFrame, horizon: int = 5) -> pd.DataFrame:
+        """ایجاد labels برای classification و regression"""
+        if df.empty:
+            return df
+        
+        df = df.copy()
+        
+        # 1. Classification: پیش‌بینی جهت حرکت (1: بالا، 0: پایین)
+        future_return = df['close'].shift(-horizon) / df['close'] - 1
+        df['label_direction'] = (future_return > 0).astype(int)
+        
+        # 2. Regression: پیش‌بینی مقدار بازده
+        df['label_return'] = future_return
+        
+        # 3. Classification سه کلاسه (بالا، ثابت، پایین)
+        threshold = 0.001  # 0.1%
+        df['label_3class'] = pd.cut(future_return, 
+                                   bins=[-np.inf, -threshold, threshold, np.inf],
+                                   labels=[0, 1, 2])
         
         return df
     
-    def create_rolling_features(self, df, columns, windows=[5, 10, 20]):
-        """Create rolling features"""
-        for col in columns:
-            for window in windows:
-                df[f'{col}_rolling_mean_{window}'] = df[col].rolling(window).mean()
-                df[f'{col}_rolling_std_{window}'] = df[col].rolling(window).std()
-                df[f'{col}_rolling_min_{window}'] = df[col].rolling(window).min()
-                df[f'{col}_rolling_max_{window}'] = df[col].rolling(window).max()
+    def save_features(self, df: pd.DataFrame, symbol: str):
+        """ذخیره ویژگی‌های مهندسی شده"""
+        if df.empty:
+            return
         
-        return df
-    
-    def calculate_pair_correlation(self, df1, df2, column='close'):
-        """Calculate correlation between two currency pairs"""
-        corr_window = 20
-        corr = df1[column].rolling(corr_window).corr(df2[column])
-        return corr
-    
-    def prepare_features_for_ml(self, df, scale_features=True):
-        """Final feature preparation for ML models"""
+        filename = f"{symbol.replace('/', '_')}_features.csv"
+        filepath = self.processed_data_dir / filename
         
-        # Remove rows with NaN values
-        initial_len = len(df)
+        df.to_csv(filepath)
+        logger.info(f"Saved features to {filepath}")
+    
+    def engineer_features(self, symbol: str) -> pd.DataFrame:
+        """مهندسی ویژگی برای یک نماد"""
+        logger.info(f"Engineering features for {symbol}...")
+        
+        # 1. بارگذاری داده‌های پردازش شده
+        df = self.load_processed_data(symbol)
+        
+        if df.empty:
+            logger.warning(f"No data for {symbol}")
+            return pd.DataFrame()
+        
+        # 2. اندیکاتورهای تکنیکال
+        df = self.add_technical_indicators(df)
+        
+        # 3. ویژگی‌های زمانی
+        df = self.add_time_features(df)
+        
+        # 4. ویژگی‌های قیمتی
+        df = self.add_price_features(df)
+        
+        # 5. ایجاد labels
+        df = self.create_labels(df, horizon=5)
+        
+        # 6. حذف NaNها
         df = df.dropna()
         
-        # Separate features and target
-        target_cols = ['target', 'target_return']
-        feature_cols = [col for col in df.columns if col not in target_cols]
+        # 7. ذخیره
+        self.save_features(df, symbol)
         
-        X = df[feature_cols].copy()
-        y = df[['target', 'target_return']].copy()
-        
-        # Scaling features
-        if scale_features:
-            X_scaled = self.scaler.fit_transform(X)
-            X = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
-            
-            # Save scaler for later use
-            joblib.dump(self.scaler, self.processed_dir / 'scaler.pkl')
-        
-        return X, y
+        logger.info(f"Engineered {len(df.columns)} features for {symbol}")
+        return df
     
-    def engineer_features_for_pair(self, symbol):
-        """Feature engineering for a currency pair"""
-        print(f"Engineering features for {symbol}...")
+    def run(self):
+        """اجرای فرآیند مهندسی ویژگی"""
+        logger.info("Starting feature engineering...")
         
-        # Load processed data
-        input_path = self.processed_dir / f"{symbol}_processed.csv"
-        if not input_path.exists():
-            print(f"File {input_path} does not exist")
-            return None
+        for symbol in ['EURUSD', 'GBPUSD', 'USDJPY']:  # لیست ثابت برای شروع
+            self.engineer_features(symbol)
         
-        df = pd.read_csv(input_path, index_col=0, parse_dates=True)
-        
-        # Calculate technical indicators
-        df = self.calculate_technical_indicators(df)
-        
-        # Create lag features for price and important indicators
-        price_cols = ['close', 'high', 'low', 'open']
-        indicator_cols = ['RSI', 'MACD', 'ATR', 'SMA_20', 'EMA_20']
-        
-        df = self.create_lag_features(df, price_cols + indicator_cols)
-        
-        # Create rolling features
-        df = self.create_rolling_features(df, ['returns', 'log_returns', 'volatility_20'])
-        
-        # Final preparation
-        X, y = self.prepare_features_for_ml(df)
-        
-        # Save features
-        features_df = pd.concat([X, y], axis=1)
-        output_path = self.processed_dir / f"{symbol}_features.csv"
-        features_df.to_csv(output_path)
-        
-        print(f"Features for {symbol} saved to {output_path}")
-        return features_df
-    
-    def engineer_all_pairs(self):
-        """Feature engineering for all currency pairs"""
-        features_data = {}
-        
-        for pair in settings.FOREX_PAIRS[:3]:
-            df = self.engineer_features_for_pair(pair)
-            if df is not None:
-                features_data[pair] = df
-        
-        return features_data
+        logger.info("Feature engineering completed!")
+
+def main():
+    engineer = FeatureEngineer()
+    engineer.run()
 
 if __name__ == "__main__":
-    engineer = FeatureEngineer()
-    features = engineer.engineer_all_pairs()
-    print(f"Feature engineering completed for {len(features)} pairs")
+    main()

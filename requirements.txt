@@ -1,82 +1,182 @@
-# requirements.txt - Python 3.12 Compatible
-# === Core Data Science ===
 numpy==1.26.4
-pandas==2.2.0
-scikit-learn==1.4.1.post1
-scipy==1.13.0
-joblib==1.3.2
+pandas
+scikit-learn
+yfinance
+streamlit
+plotly
+python-dotenv
+loguru
 
-# === Machine Learning ===
-xgboost==2.0.3
-lightgbm==4.3.0
-catboost==1.2.5
+# # requirements.txt
 
-# === Deep Learning ===
-tensorflow==2.15.0
-keras==2.15.0
+# # === CORE DATA SCIENCE ===
+# numpy
+# pandas
+# scikit-learn
+# scipy
+# joblib
 
-# === Financial Data (MAIN) ===
-yfinance==0.2.37
-alpha-vantage==4.0.0
-pandas-ta==0.3.14b0  # حالا برای 3.12 کار می‌کند
-ccxt==4.2.85
+# # === MACHINE LEARNING ===
+# xgboost
+# lightgbm
 
-# === Technical Analysis Alternatives ===
-# اگر pandas-ta مشکل داشت از این‌ها استفاده کنید:
-ta==0.11.0  # جایگزین سبک‌تر برای TA-Lib
-technical-analysis==0.2.0
+# # === DEEP LEARNING ===
+# # استفاده از نسخه‌های سازگار
+# tensorflow==2.16.2
+# # یا tensorflow-cpu==2.16.2 اگر GPU ندارید
+# # Keras 3 داخل TensorFlow 2.16+ تعبیه شده، نیازی به نصب جداگانه نیست
 
-# === Backtesting ===
-backtrader==1.9.78.123
-bt==0.2.8
-vectorbt==0.25.6  # مدرن‌تر و سریع‌تر
+# # === FINANCIAL DATA ===
+# yfinance==0.2.38  # نسخه قدیمی‌تر که محدودیت protobuf کمتری دارد
+# alpha-vantage
+# pandas-ta
+# ccxt
 
-# === Visualization ===
-matplotlib==3.8.3
-seaborn==0.13.2
-plotly==5.19.0
-plotly-express==0.4.1
-cufflinks==0.17.3  # برای integration با pandas
+# # === TECHNICAL ANALYSIS ===
+# ta
+# technical-analysis
+# finplot
 
-# === Dashboard ===
-streamlit==1.31.0
-streamlit-aggrid==0.3.4.post3
-streamlit-echarts==0.6.1
-streamlit-plotly-events==0.0.6
+# # === BACKTESTING ===
+# backtrader
 
-# === Utilities ===
-python-dotenv==1.0.1
-tqdm==4.66.2
-loguru==0.7.2
-colorama==0.4.6
-rich==13.7.0
+# # === VISUALIZATION ===
+# matplotlib
+# seaborn
+# plotly
+# plotly-express
 
-# === Database ===
-psycopg2-binary==2.9.9
-redis==5.0.1
-sqlalchemy==2.0.29
-alembic==1.13.1
+# # === DASHBOARD ===
+# streamlit
+# streamlit-aggrid
+# streamlit-echarts
 
-# === API & Web ===
-fastapi==0.109.2
-uvicorn[standard]==0.27.1
-requests==2.31.0
-httpx==0.26.0
+# # === UTILITIES ===
+# python-dotenv
+# tqdm
+# loguru
+# rich
+# python-multipart
 
-# === Time & Date ===
-pytz==2024.1
-python-dateutil==2.8.2
-holidays==0.45
+# # === DATABASE ===
+# psycopg2-binary
+# redis
+# sqlalchemy
+# alembic
 
-# === Development ===
-jupyter==1.0.0
-jupyterlab==4.1.5
-ipython==8.23.0
-black==24.2.0
-flake8==7.0.0
-pytest==8.0.1
-pytest-cov==4.1.0
+# # === API & WEB ===
+# fastapi
+# uvicorn
+# requests
+# httpx
 
-# === Optional for Performance ===
-numba==0.59.0  # برای speedup محاسبات
-polars==1.4.1   # جایگزین سریع pandas
+# # === TIME & DATE ===
+# pytz
+# python-dateutil
+# holidays
+
+# # === DEVELOPMENT ===
+# jupyter
+# jupyterlab
+# ipython
+# black
+# flake8
+# pytest
+# pytest-cov
+
+# # === OPTIONAL FOR SPEED ===
+# polars
+
+
+
+
+# # requirements.txt - کاملاً تست شده برای Python 3.12
+# # Generated: March 2025
+# # Python: 3.12.x
+
+# # === CORE DATA SCIENCE ===
+# numpy==1.26.4
+# pandas==2.2.1
+# scikit-learn==1.5.0
+# scipy==1.13.0
+# joblib==1.4.0
+
+# # === MACHINE LEARNING ===
+# xgboost==2.0.3
+# lightgbm==4.3.0
+# # catboost==1.2.5  # با 3.12 مشکل دارد، موقتاً کامنت کنید
+
+# # === DEEP LEARNING ===
+# # TensorFlow 2.15 برای 3.12 موجود نیست، از 2.16+ استفاده کنید
+# tensorflow==2.16.2  # یا tensorflow-cpu اگر GPU ندارید
+# keras==3.3.0  # Keras 3 جدید و مستقل
+
+# # === FINANCIAL DATA ===
+# yfinance==0.2.38
+# # alpha-vantage==4.0.0
+# alpha-vantage==2.3.1 
+# # pandas-ta==0.3.14b0
+# pandas-ta==0.4.71b0 
+# ccxt==4.2.85
+
+# # === TECHNICAL ANALYSIS (بدون TA-Lib) ===
+# ta==0.11.0  # جایگزین سبک
+# technical-analysis==0.2.0
+# finplot==1.9.1  # برای visualization مالی
+
+# # === BACKTESTING ===
+# backtrader==1.9.78.123
+# # vectorbt==0.25.6  # موقتاً کامنت - نیاز به build دارد
+
+# # === VISUALIZATION ===
+# matplotlib==3.8.3
+# seaborn==0.13.2
+# plotly==5.19.0
+# plotly-express==0.4.1
+
+# # === DASHBOARD ===
+# streamlit==1.32.0
+# streamlit-aggrid==0.3.4.post3
+# streamlit-echarts==0.6.1
+
+# # === UTILITIES ===
+# python-dotenv==1.0.1
+# tqdm==4.66.3
+# loguru==0.7.2
+# rich==13.7.1
+# python-multipart==0.0.9
+
+# # === DATABASE ===
+# psycopg2-binary==2.9.9
+# redis==5.0.3
+# sqlalchemy==2.0.29
+# alembic==1.13.1
+
+# # === API & WEB ===
+# fastapi==0.109.2
+# uvicorn[standard]==0.27.1
+# requests==2.31.0
+# httpx==0.27.0
+
+# # === TIME & DATE ===
+# pytz==2024.1
+# python-dateutil==2.9.0.post0
+# holidays==0.47
+
+# # === DEVELOPMENT ===
+# jupyter==1.0.0
+# jupyterlab==4.2.0
+# ipython==8.24.0
+# black==24.3.0
+# flake8==7.0.0
+# pytest==8.1.1
+# pytest-cov==4.1.0
+
+# # === OPTIONAL FOR SPEED ===
+# # numba==0.59.1  # موقتاً کامنت - نیاز به LLVM دارد
+# polars==1.4.1
+
+# # === ALTERNATIVE ML ===
+# # اگر TensorFlow مشکل داشت:
+# # pytorch==2.2.1  # به جای TensorFlow
+# # torchvision==0.17.1

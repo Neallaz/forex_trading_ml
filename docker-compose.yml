@@ -1,25 +1,43 @@
 # docker-compose.yml
-version: '3.8'
+# version: '3.8'
 
 services:
+  # ml-trader:
+  #   build: .
+  #   container_name: forex-ml-trader-312
+  #   # restart: unless-stopped
+  #   volumes:
+  #     - ./data:/app/data
+  #     - ./models:/app/models
+  #     - ./logs:/app/logs
+  #     - ./results:/app/results
+  #   environment:
+  #     - PYTHONPATH=/app
+  #     - TZ=UTC
+  #     - LOG_LEVEL=INFO
+  #     - PYTHON_VERSION=3.12
+  #   env_file:
+  #     - .env
+  #   command: python main.py --mode train
   ml-trader:
     build: .
-    container_name: forex-ml-trader-312
-    restart: unless-stopped
+    container_name: ml-trader-dev
+    stdin_open: true
+    tty: true
     volumes:
+      # - ./app:/app
       - ./data:/app/data
       - ./models:/app/models
       - ./logs:/app/logs
       - ./results:/app/results
-    environment:
-      - PYTHONPATH=/app
-      - TZ=UTC
-      - LOG_LEVEL=INFO
-      - PYTHON_VERSION=3.12
+      - ./config:/app/config
     env_file:
       - .env
-    command: python main.py --mode train
-    
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=DEBUG
+    command: tail -f /dev/null
+
   dashboard:
     build: .
     container_name: forex-dashboard-312

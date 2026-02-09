@@ -22,7 +22,7 @@ class DataPreprocessor:
             logger.warning(f"File not found: {filepath}")
             return pd.DataFrame()
         
-        df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+        df = pd.read_csv(filepath, index_col='Datetime', parse_dates=True)
         return df
     
     def clean_data(self, df: pd.DataFrame) -> pd.DataFrame:

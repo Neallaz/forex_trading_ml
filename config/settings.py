@@ -10,7 +10,7 @@ load_dotenv()
 # ==================== تنظیمات داده ====================
 class DataConfig:
     # جفت ارزها
-    CURRENCY_PAIRS = os.getenv('CURRENCY_PAIRS', 'EURUSD,GBPUSD,USDJPY').split(',')
+    CURRENCY_PAIRS = os.getenv('CURRENCY_PAIRS', 'EURUSD,GBPUSD,GBPEUR,GBPJPY').split(',')
     
     # تایم‌فریم‌ها
     TIMEFRAMES = {
@@ -19,9 +19,11 @@ class DataConfig:
         '1d': '1d'
     }
     
-    # تاریخچه داده
-    START_DATE = datetime(2020, 1, 1)
-    END_DATE = datetime(2023, 12, 31)
+    # # تاریخچه داده
+    # START_DATE = datetime(2020, 1, 1)
+    # END_DATE = datetime(2023, 12, 31)
+    START_DATE = datetime.now() - timedelta(days=729)
+    END_DATE = datetime.now()
     
     # فیلدهای قیمت
     OHLC_COLUMNS = ['open', 'high', 'low', 'close', 'volume']

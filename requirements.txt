@@ -6,6 +6,9 @@ streamlit
 plotly
 python-dotenv
 loguru
+xgboost
+lightgbm
+catboost
 
 # # requirements.txt
 

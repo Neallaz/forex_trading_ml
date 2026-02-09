@@ -1,28 +1,32 @@
+
 # Forex ML Trading System
 
-یک سیستم معاملاتی الگوریتمی هوشمند برای بازار فارکس با استفاده از یادگیری ماشین و یادگیری عمیق.
+An intelligent algorithmic trading system for the Forex market using Machine Learning and Deep Learning.
 
-## 🎯 ویژگی‌ها
+## 🎯 Features
 
-- 📊 جمع‌آوری خودکار داده‌های بازار فارکس
-- 🤖 مدل‌های پیشرفته ML/DL برای پیش‌بینی قیمت
-- 📈 بکتست واقع‌بینانه با در نظر گرفتن هزینه‌ها
-- 🎨 داشبورد تعاملی با Streamlit
-- 🐳 پشتیبانی از Docker برای دپلوی آسان
-- 🔄 قابلیت پیش‌بینی چند مدلی
+* 📊 Automated Forex market data collection
+* 🤖 Advanced ML/DL models for price prediction
+* 📈 Realistic backtesting with cost considerations
+* 🎨 Interactive dashboard with Streamlit
+* 🐳 Docker support for easy deployment
+* 🔄 Multi-model prediction capability
 
-## 🚀 شروع سریع
+## 🚀 Quick Start
 
-### با Docker (توصیه شده)
+### Using Docker (Recommended)
 
 ```bash
-# 1. کلون کردن ریپازیتوری
+# 1. Clone the repository
 git clone https://github.com/yourusername/forex-ml-trading.git
 cd forex-ml-trading
 
-# 2. کپی فایل محیطی
+# 2. Copy the environment file
 cp .env.example .env
-# مقادیر API Key را در فایل .env تنظیم کنید
+# Set your API Key values in the .env file
 
-# 3. ساخت و اجرای کانتینرها
+# 3. Build and run the containers
 docker-compose up --build
+```
+
+
